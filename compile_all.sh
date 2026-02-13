@@ -1,8 +1,11 @@
 #!/bin/bash
 
-for i in `seq 3 7` ; do
-    rm multiobj_$i
+set -euo pipefail
+
+NVCC_BIN="${NVCC:-nvcc}"
+
+for i in $(seq 3 7); do
     make clean
-    make -j NUM_OBJS=$i
-    cp multiobj multiobj$i
+    make -j cpu NUM_OBJS="$i"
+    make -j gpu NUM_OBJS="$i" NVCC="$NVCC_BIN"
 done

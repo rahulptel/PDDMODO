@@ -50,6 +50,9 @@ CFLAGS  += $(CCOPT)
 NUM_OBJS=3
 CFLAGS += -DNOBJS=$(NUM_OBJS)
 
+BUILD_VARIANT = $(if $(filter 1,$(USE_CUDA)),gpu,cpu)
+EXECUTABLE = multiobj_$(BUILD_VARIANT)_nobjs$(NUM_OBJS)
+
 ifeq ($(USE_CUDA),1)
 CFLAGS += -DUSE_CUDA
 CUDAFLAGS = -std=c++11 -O3 -DUSE_CUDA -DNOBJS=$(NUM_OBJS) -I$(BOOSTDIR)/include
@@ -59,7 +62,7 @@ endif
 
 # ---- COMPILE  ----
 SRC_DIR   := src
-OBJ_DIR   := obj
+OBJ_DIR   := obj/$(BUILD_VARIANT)_nobjs$(NUM_OBJS)
 
 SRC_DIRS  := $(shell find $(SRC_DIR) -type d)
 OBJ_DIRS  := $(addprefix $(OBJ_DIR)/,$(SRC_DIRS))
@@ -78,9 +81,17 @@ vpath %.cpp $(SRC_DIRS)
 
 # ---- TARGETS ----
 
-EXECUTABLE=multiobj
+.PHONY: all cpu gpu both clean
 
 all: $(EXECUTABLE)
+
+cpu:
+	$(MAKE) USE_CUDA=0 NUM_OBJS=$(NUM_OBJS)
+
+gpu:
+	$(MAKE) USE_CUDA=1 NUM_OBJS=$(NUM_OBJS)
+
+both: cpu gpu
 
 $(EXECUTABLE): makedir $(OBJ_FILES) 
 	$(CCC) $(OBJ_FILES) $(LDFLAGS) $(PROF) -o $@
@@ -97,5 +108,5 @@ $(OBJ_DIRS):
 	@mkdir -p $@
 
 clean:
-	@rm -rf obj 
-	@rm -rf $(EXECUTABLE)
+	@rm -rf obj
+	@rm -f multiobj_cpu_nobjs* multiobj_gpu_nobjs* multiobj
