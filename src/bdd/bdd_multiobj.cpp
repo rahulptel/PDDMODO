@@ -7,6 +7,7 @@
 
 #ifdef USE_CUDA
 #include "../cuda/topdown_cuda.hpp"
+#include "../cuda/coupled_cuda.hpp"
 #endif
 
 typedef std::pair<int,int> intpair;
@@ -34,6 +35,24 @@ ParetoFrontier* BDDMultiObj::pareto_frontier_topdown_cuda(BDD* bdd, bool maximiz
     ParetoFrontier* frontier = topdown_cuda_enumerate(bdd, maximization, problem_type, dominance_strategy, stats, &reason);
     if (frontier == NULL && !reason.empty()) {
         cout << "Warning: CUDA top-down enumeration unavailable (" << reason << ")" << endl;
+    }
+    return frontier;
+}
+
+//
+// Find pareto frontier using dynamic layer cutset on CUDA
+//
+ParetoFrontier* BDDMultiObj::pareto_frontier_dynamic_layer_cutset_cuda(BDD* bdd, bool maximization, const int problem_type, const int dominance_strategy, MultiObjectiveStats* stats) {
+    if (stats != NULL) {
+        stats->pareto_dominance_time = 0;
+        stats->pareto_dominance_filtered = 0;
+        stats->layer_coupling = 0;
+    }
+
+    std::string reason;
+    ParetoFrontier* frontier = coupled_cuda_enumerate(bdd, maximization, problem_type, dominance_strategy, stats, &reason);
+    if (frontier == NULL && !reason.empty()) {
+        cout << "Error: CUDA dynamic-cutset enumeration failed (" << reason << ")" << endl;
     }
     return frontier;
 }

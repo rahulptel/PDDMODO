@@ -3,7 +3,12 @@
 // --------------------------------------------------
 
 // General includes
+#include <algorithm>
 #include <iostream>
+#include <numeric>
+#include <sstream>
+#include <string>
+#include <vector>
 #include <cstdlib>
 
 #include "bdd/bdd.hpp"
@@ -40,6 +45,69 @@
 
 
 using namespace std;
+
+static std::vector<ObjType> canonicalize_frontier(const ParetoFrontier* frontier) {
+    if (frontier == NULL || frontier->sols.empty()) {
+        return std::vector<ObjType>();
+    }
+
+    const int num_sols = frontier->get_num_sols();
+    std::vector<int> order(num_sols, 0);
+    std::iota(order.begin(), order.end(), 0);
+    std::sort(order.begin(), order.end(), [frontier](int lhs, int rhs) {
+        const int lhs_base = lhs * NOBJS;
+        const int rhs_base = rhs * NOBJS;
+        for (int o = 0; o < NOBJS; ++o) {
+            if (frontier->sols[lhs_base + o] != frontier->sols[rhs_base + o]) {
+                return frontier->sols[lhs_base + o] < frontier->sols[rhs_base + o];
+            }
+        }
+        return false;
+    });
+
+    std::vector<ObjType> canonical;
+    canonical.reserve(frontier->sols.size());
+    for (int idx : order) {
+        const int base = idx * NOBJS;
+        for (int o = 0; o < NOBJS; ++o) {
+            canonical.push_back(frontier->sols[base + o]);
+        }
+    }
+    return canonical;
+}
+
+static bool compare_frontiers_exact(const ParetoFrontier* gpu_frontier,
+                                    const ParetoFrontier* cpu_frontier,
+                                    std::string* reason) {
+    const std::vector<ObjType> gpu = canonicalize_frontier(gpu_frontier);
+    const std::vector<ObjType> cpu = canonicalize_frontier(cpu_frontier);
+
+    if (gpu.size() != cpu.size()) {
+        if (reason != NULL) {
+            std::ostringstream oss;
+            oss << "size mismatch (gpu=" << (gpu.size() / NOBJS) << ", cpu=" << (cpu.size() / NOBJS) << ")";
+            *reason = oss.str();
+        }
+        return false;
+    }
+
+    for (size_t i = 0; i < gpu.size(); ++i) {
+        if (gpu[i] != cpu[i]) {
+            if (reason != NULL) {
+                std::ostringstream oss;
+                oss << "first mismatch at flattened index " << i
+                    << " (gpu=" << gpu[i] << ", cpu=" << cpu[i] << ")";
+                *reason = oss.str();
+            }
+            return false;
+        }
+    }
+
+    if (reason != NULL) {
+        reason->clear();
+    }
+    return true;
+}
 
 //
 // Main function
@@ -311,6 +379,7 @@ int main(int argc, char* argv[]) {
     // Compute pareto frontier based on methodology
     //cout << "\n\nComputing pareto frontier..." << endl;
     ParetoFrontier* pareto_frontier = NULL;
+    bool used_cuda_method3 = false;
     timers.start_timer(pareto_time);
     
     if (method == 1) {
@@ -331,17 +400,48 @@ int main(int argc, char* argv[]) {
         
     } else if (method == 3) {
         // -- Dynamic layer cutset --
-	    pareto_frontier = BDDMultiObj::pareto_frontier_dynamic_layer_cutset(bdd, maximization, problem_type, dominance, statsMultiObj);
-	}
+#ifdef USE_CUDA
+        pareto_frontier = BDDMultiObj::pareto_frontier_dynamic_layer_cutset_cuda(bdd, maximization, problem_type, dominance, statsMultiObj);
+        used_cuda_method3 = true;
+#else
+        pareto_frontier = BDDMultiObj::pareto_frontier_dynamic_layer_cutset(bdd, maximization, problem_type, dominance, statsMultiObj);
+#endif
+    }
 
 	if (pareto_frontier == NULL) {
 		cout << "\nError - pareto frontier not computed" << endl;
 		exit(1);
 	}
 
-	timers.end_timer(pareto_time);
+    timers.end_timer(pareto_time);
 
-	double total_time = (timers.get_time(bdd_compilation_time) + timers.get_time(approx_time) + timers.get_time(pareto_time) );
+#ifdef USE_CUDA
+    if (used_cuda_method3) {
+        const char* verify_env = getenv("MULTIOBJ_VERIFY_GPU_METHOD3");
+        const bool verify = (verify_env != NULL && verify_env[0] == '1');
+        if (verify) {
+            MultiObjectiveStats cpu_stats;
+            ParetoFrontier* cpu_frontier = BDDMultiObj::pareto_frontier_dynamic_layer_cutset(bdd, maximization, problem_type, dominance, &cpu_stats);
+            if (cpu_frontier == NULL) {
+                cout << "Error: CPU parity check failed because CPU dynamic-cutset returned NULL." << endl;
+                exit(1);
+            }
+
+            std::string mismatch_reason;
+            if (!compare_frontiers_exact(pareto_frontier, cpu_frontier, &mismatch_reason)) {
+                cout << "Error: GPU method=3 parity check failed (" << mismatch_reason << ")." << endl;
+                exit(1);
+            }
+            if (dominance == 0 && statsMultiObj->layer_coupling != cpu_stats.layer_coupling) {
+                cout << "Error: GPU method=3 parity check failed (layer_coupling mismatch: gpu="
+                     << statsMultiObj->layer_coupling << ", cpu=" << cpu_stats.layer_coupling << ")." << endl;
+                exit(1);
+            }
+        }
+    }
+#endif
+
+    double total_time = (timers.get_time(bdd_compilation_time) + timers.get_time(approx_time) + timers.get_time(pareto_time) );
 
 	// cout << "\nPareto frontier: " << endl;
 	// cout << "\tNumber of solutions: " << pareto_frontier->get_num_sols() << endl;
