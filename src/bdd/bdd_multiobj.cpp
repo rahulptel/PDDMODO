@@ -23,7 +23,7 @@ inline bool SetPackingStateMinElementSmallestToLargestComp(Node* l, Node* r) {
 //
 // Find pareto frontier using top-down approach on CUDA
 //
-ParetoFrontier* BDDMultiObj::pareto_frontier_topdown_cuda(BDD* bdd, bool maximization, MultiObjectiveStats* stats) {
+ParetoFrontier* BDDMultiObj::pareto_frontier_topdown_cuda(BDD* bdd, bool maximization, const int problem_type, const int dominance_strategy, MultiObjectiveStats* stats) {
     if (stats != NULL) {
         stats->pareto_dominance_time = 0;
         stats->pareto_dominance_filtered = 0;
@@ -31,7 +31,7 @@ ParetoFrontier* BDDMultiObj::pareto_frontier_topdown_cuda(BDD* bdd, bool maximiz
     }
 
     std::string reason;
-    ParetoFrontier* frontier = topdown_cuda_enumerate(bdd, maximization, &reason);
+    ParetoFrontier* frontier = topdown_cuda_enumerate(bdd, maximization, problem_type, dominance_strategy, stats, &reason);
     if (frontier == NULL && !reason.empty()) {
         cout << "Warning: CUDA top-down enumeration unavailable (" << reason << ")" << endl;
     }

@@ -38,7 +38,13 @@ struct BDDMultiObj {
 
 #ifdef USE_CUDA
     // Find pareto frontier from top-down approach / CUDA
-    static ParetoFrontier* pareto_frontier_topdown_cuda(BDD* bdd, bool maximization=true, MultiObjectiveStats* stats = NULL);
+    static ParetoFrontier* pareto_frontier_topdown_cuda(BDD* bdd, bool maximization=true, const int problem_type=-1, const int dominance_strategy=0, MultiObjectiveStats* stats = NULL);
+
+    // Filter layer based on dominance / CUDA
+    static void filter_dominance_cuda(BDD* bdd, const int layer, const int problem_type, const int dominance_strategy, MultiObjectiveStats* stats);
+
+    // Filter layer based on dominance / knapsack / CUDA
+    static void filter_dominance_knapsack_cuda(BDD* bdd, const int layer, MultiObjectiveStats* stats);
 #endif
 
     // Find pareto frontier from bottom-up approach
