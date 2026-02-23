@@ -5,8 +5,10 @@
 #include "bdd_multiobj.hpp"
 #include "bdd_alg.hpp"
 #include "../cuda/topdown_cuda.hpp"
+#include "../cuda/coupled_cuda.hpp"
 
 #pragma weak topdown_cuda_enumerate
+#pragma weak coupled_cuda_enumerate
 
 typedef std::pair<int,int> intpair;
 
@@ -1745,6 +1747,32 @@ ParetoFrontier* BDDMultiObj::pareto_frontier_topdown(MDD* mdd, MultiObjectiveSta
     // Erase memory
 	delete mgmr;
 	return mdd->get_terminal()->pareto_frontier;
+}
+
+//
+// Find pareto frontier using dynamic layer cutset on CUDA (MDD)
+//
+ParetoFrontier* BDDMultiObj::pareto_frontier_dynamic_layer_cutset_cuda(MDD* mdd, MultiObjectiveStats* stats, std::string* reason) {
+    if (stats != NULL) {
+        stats->pareto_dominance_time = 0;
+        stats->pareto_dominance_filtered = 0;
+        stats->layer_coupling = 0;
+    }
+
+    if (coupled_cuda_enumerate == NULL) {
+        if (reason != NULL) {
+            *reason = "CUDA coupled enumeration symbol is unavailable in this binary";
+        }
+        return NULL;
+    }
+
+    std::string local_reason;
+    std::string* active_reason = reason != NULL ? reason : &local_reason;
+    ParetoFrontier* frontier = coupled_cuda_enumerate(mdd, stats, active_reason);
+    if (frontier == NULL && reason != NULL && reason->empty()) {
+        *reason = "CUDA coupled enumeration failed";
+    }
+    return frontier;
 }
 
 

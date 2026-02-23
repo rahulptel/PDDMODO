@@ -116,7 +116,7 @@ int main(int argc, char *argv[])
     int approx_T = atoi(argv[6]);
     int dominance = atoi(argv[7]);
 
-    if (backend == BACKEND_CUDA && method != 1)
+    if (backend == BACKEND_CUDA && method != 1 && method != 3)
     {
         cout << "Error - CUDA backend is unsupported for method " << method << "." << endl;
         exit(1);
@@ -248,12 +248,6 @@ int main(int argc, char *argv[])
     }
     else if (problem_type == 4)
     {
-        if (backend == BACKEND_CUDA)
-        {
-            cout << "Error - CUDA backend is unsupported for problem type 6 (TSP)." << endl;
-            exit(1);
-        }
-
         clock_t init_tsp = clock();
 
         // Read instance
@@ -272,9 +266,28 @@ int main(int argc, char *argv[])
         // Generate frontier
         clock_t frontier_tsp = clock();
 
-        // cout << "\nGenerating frontier..." << endl;
         MultiObjectiveStats *statsMultiObj = new MultiObjectiveStats;
-        ParetoFrontier *pareto_frontier = BDDMultiObj::pareto_frontier_dynamic_layer_cutset(mdd, statsMultiObj);
+        ParetoFrontier *pareto_frontier = NULL;
+
+        if (backend == BACKEND_CUDA)
+        {
+            string cuda_reason;
+            pareto_frontier = BDDMultiObj::pareto_frontier_dynamic_layer_cutset_cuda(mdd, statsMultiObj, &cuda_reason);
+            if (pareto_frontier == NULL)
+            {
+                cout << "Error - CUDA backend requested but coupled enumeration failed";
+                if (!cuda_reason.empty())
+                {
+                    cout << ": " << cuda_reason;
+                }
+                cout << endl;
+                exit(1);
+            }
+        }
+        else
+        {
+            pareto_frontier = BDDMultiObj::pareto_frontier_dynamic_layer_cutset(mdd, statsMultiObj);
+        }
         assert(pareto_frontier != NULL);
 
         frontier_tsp = clock() - frontier_tsp;
