@@ -269,25 +269,37 @@ int main(int argc, char *argv[])
         MultiObjectiveStats *statsMultiObj = new MultiObjectiveStats;
         ParetoFrontier *pareto_frontier = NULL;
 
-        if (backend == BACKEND_CUDA)
-        {
-            string cuda_reason;
-            pareto_frontier = BDDMultiObj::pareto_frontier_dynamic_layer_cutset_cuda(mdd, statsMultiObj, &cuda_reason);
-            if (pareto_frontier == NULL)
-            {
-                cout << "Error - CUDA backend requested but coupled enumeration failed";
-                if (!cuda_reason.empty())
-                {
-                    cout << ": " << cuda_reason;
+        if (method == 1) { // Top-down
+            if (backend == BACKEND_CUDA) {
+                string cuda_reason;
+                pareto_frontier = BDDMultiObj::pareto_frontier_topdown_cuda(mdd, statsMultiObj, &cuda_reason);
+                if (pareto_frontier == NULL) {
+                    cout << "Error - CUDA backend requested but top-down enumeration failed";
+                    if (!cuda_reason.empty()) cout << ": " << cuda_reason;
+                    cout << endl;
+                    exit(1);
                 }
-                cout << endl;
-                exit(1);
+            } else {
+                pareto_frontier = BDDMultiObj::pareto_frontier_topdown(mdd, statsMultiObj);
             }
+        } else if (method == 3) { // Coupled
+            if (backend == BACKEND_CUDA) {
+                string cuda_reason;
+                pareto_frontier = BDDMultiObj::pareto_frontier_dynamic_layer_cutset_cuda(mdd, statsMultiObj, &cuda_reason);
+                if (pareto_frontier == NULL) {
+                    cout << "Error - CUDA backend requested but coupled enumeration failed";
+                    if (!cuda_reason.empty()) cout << ": " << cuda_reason;
+                    cout << endl;
+                    exit(1);
+                }
+            } else {
+                pareto_frontier = BDDMultiObj::pareto_frontier_dynamic_layer_cutset(mdd, statsMultiObj);
+            }
+        } else {
+            cout << "Error - method " << method << " not valid for TSP" << endl;
+            exit(1);
         }
-        else
-        {
-            pareto_frontier = BDDMultiObj::pareto_frontier_dynamic_layer_cutset(mdd, statsMultiObj);
-        }
+
         assert(pareto_frontier != NULL);
 
         frontier_tsp = clock() - frontier_tsp;

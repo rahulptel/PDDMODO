@@ -8,6 +8,7 @@
 #include "../cuda/coupled_cuda.hpp"
 
 #pragma weak topdown_cuda_enumerate
+#pragma weak topdown_mdd_cuda_enumerate
 #pragma weak coupled_cuda_enumerate
 
 typedef std::pair<int,int> intpair;
@@ -46,6 +47,24 @@ ParetoFrontier* BDDMultiObj::pareto_frontier_topdown_cuda(BDD* bdd, bool maximiz
     return frontier;
 }
 
+//
+// Find pareto frontier using top-down approach on CUDA for MDD
+//
+ParetoFrontier* BDDMultiObj::pareto_frontier_topdown_cuda(MDD* mdd, MultiObjectiveStats* stats, std::string* reason) {
+    if (stats != NULL) {
+        stats->pareto_dominance_time = 0;
+        stats->pareto_dominance_filtered = 0;
+        stats->layer_coupling = 0;
+    }
+
+    std::string local_reason;
+    std::string* active_reason = reason != NULL ? reason : &local_reason;
+    ParetoFrontier* frontier = topdown_mdd_cuda_enumerate(mdd, stats, active_reason);
+    if (frontier == NULL && reason != NULL && reason->empty()) {
+        *reason = "CUDA top-down enumeration failed for MDD";
+    }
+    return frontier;
+}
 
 //
 // Find pareto frontier using top-down approach

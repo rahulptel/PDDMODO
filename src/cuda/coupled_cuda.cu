@@ -12,6 +12,7 @@
 #include <cuda_runtime.h>
 
 #include "../bdd/bdd_multiobj.hpp"
+#include "topdown_cuda.hpp"
 
 #include <thrust/device_vector.h>
 #include <thrust/copy.h>
@@ -28,29 +29,6 @@ namespace {
 
 constexpr int kThreadsPerBlock = 128;
 constexpr int kWarpSize = 32;
-
-// Flat representation of one MDD layer's connectivity, on device.
-struct PackedMDDLayer {
-    int num_nodes;
-
-    // Top-down: incoming arcs grouped by destination node (this layer).
-    // edge_src indices refer to nodes in layer-1.
-    int td_num_edges;
-    thrust::device_vector<int> td_in_edge_offsets;
-    thrust::device_vector<int> td_edge_src;
-    thrust::device_vector<ObjType> td_edge_weights;
-
-    // Bottom-up: outgoing arcs grouped by node (this layer).
-    // edge_src indices refer to head nodes in layer+1.
-    int bu_num_edges;
-    thrust::device_vector<int> bu_in_edge_offsets;
-    thrust::device_vector<int> bu_edge_src;
-    thrust::device_vector<ObjType> bu_edge_weights;
-
-    // Per-node arc counts for the layer-value heuristic.
-    thrust::device_vector<int> out_arc_counts;
-    thrust::device_vector<int> in_arc_counts;
-};
 
 inline bool set_reason(std::string* reason, const std::string& message) {
     if (reason != NULL) *reason = message;
@@ -416,6 +394,8 @@ __global__ void mark_frontier_dominated_kernel(
     if (valid) alive[i] = dom ? 0 : 1;
 }
 
+} // anonymous namespace
+
 // ---------------------------------------------------------------
 // expand_layer_cuda: runs expansion kernels for one MDD layer.
 // Works identically for top-down and bottom-up.
@@ -546,8 +526,6 @@ int compute_layer_value(const thrust::device_vector<int>& offsets,
     cudaDeviceSynchronize();
     return thrust::reduce(tmp.begin(), tmp.end(), 0);
 }
-
-} // anonymous namespace
 
 
 // ---------------------------------------------------------------
