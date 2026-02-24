@@ -47,7 +47,7 @@ int main(int argc, char *argv[])
     auto print_usage = []()
     {
         cout << '\n';
-        cout << "Usage: multiobj_nobjs<NUM_OBJS> [input file] [problem type] [preprocess?] [method] [appr-S] [appr-T] [dominance] [backend]\n";
+        cout << "Usage: multiobj_nobjs<NUM_OBJS> [input file] [problem type] [preprocess?] [method] [appr-S] [appr-T] [dominance] [backend] [gpu_version]\n";
 
         cout << "\n\twhere:";
 
@@ -78,17 +78,24 @@ int main(int argc, char *argv[])
         cout << "\t\tbackend = cuda: force CUDA pareto frontier enumeration (method 1 only)\n";
         cout << "\t\tbackend omitted: defaults to cpu\n";
 
+        cout << "\n";
+        cout << "\t\tgpu_version = 1: older dense 2D CUDA grid architecture\n";
+        cout << "\t\tgpu_version = 2: newer perfectly load-balanced 1D CUDA grid architecture\n";
+        cout << "\t\tgpu_version omitted: defaults to 2\n";
+
         cout << endl;
     };
 
-    if (argc != 8 && argc != 9)
+    if (argc != 8 && argc != 9 && argc != 10)
     {
         print_usage();
         exit(1);
     }
 
     Backend backend = BACKEND_CPU;
-    if (argc == 9)
+    int gpu_version = 2; // Default to v2 (1D optimized grid)
+
+    if (argc >= 9)
     {
         string backend_arg(argv[8]);
         if (backend_arg == "cpu")
@@ -102,6 +109,16 @@ int main(int argc, char *argv[])
         else
         {
             cout << "Error - backend must be 'cpu' or 'cuda' (received '" << backend_arg << "')." << endl;
+            print_usage();
+            exit(1);
+        }
+    }
+
+    if (argc >= 10)
+    {
+        gpu_version = atoi(argv[9]);
+        if (gpu_version != 1 && gpu_version != 2) {
+            cout << "Error - gpu_version must be 1 or 2 (received " << gpu_version << ")." << endl;
             print_usage();
             exit(1);
         }
@@ -272,7 +289,7 @@ int main(int argc, char *argv[])
         if (method == 1) { // Top-down
             if (backend == BACKEND_CUDA) {
                 string cuda_reason;
-                pareto_frontier = BDDMultiObj::pareto_frontier_topdown_cuda(mdd, statsMultiObj, &cuda_reason);
+                pareto_frontier = BDDMultiObj::pareto_frontier_topdown_cuda(mdd, statsMultiObj, &cuda_reason, gpu_version);
                 if (pareto_frontier == NULL) {
                     cout << "Error - CUDA backend requested but top-down enumeration failed";
                     if (!cuda_reason.empty()) cout << ": " << cuda_reason;
@@ -285,7 +302,7 @@ int main(int argc, char *argv[])
         } else if (method == 3) { // Coupled
             if (backend == BACKEND_CUDA) {
                 string cuda_reason;
-                pareto_frontier = BDDMultiObj::pareto_frontier_dynamic_layer_cutset_cuda(mdd, statsMultiObj, &cuda_reason);
+                pareto_frontier = BDDMultiObj::pareto_frontier_dynamic_layer_cutset_cuda(mdd, statsMultiObj, &cuda_reason, gpu_version);
                 if (pareto_frontier == NULL) {
                     cout << "Error - CUDA backend requested but coupled enumeration failed";
                     if (!cuda_reason.empty()) cout << ": " << cuda_reason;
@@ -341,7 +358,7 @@ int main(int argc, char *argv[])
         if (backend == BACKEND_CUDA)
         {
             string cuda_reason;
-            pareto_frontier = BDDMultiObj::pareto_frontier_topdown_cuda(bdd, maximization, problem_type, dominance, statsMultiObj, &cuda_reason);
+            pareto_frontier = BDDMultiObj::pareto_frontier_topdown_cuda(bdd, maximization, problem_type, dominance, statsMultiObj, &cuda_reason, gpu_version);
             if (pareto_frontier == NULL)
             {
                 cout << "Error - CUDA backend requested but top-down enumeration failed";

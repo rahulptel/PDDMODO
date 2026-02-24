@@ -24,13 +24,15 @@ ParetoFrontier* topdown_cuda_enumerate(BDD* bdd,
                                        const int problem_type,
                                        const int dominance_strategy,
                                        MultiObjectiveStats* stats,
-                                       std::string* reason);
+                                       std::string* reason,
+                                       int gpu_version = 2);
 
 // Runs top-down frontier enumeration on CUDA for MDDs.
 // Returns NULL on failure and fills reason when provided.
 ParetoFrontier* topdown_mdd_cuda_enumerate(MDD* mdd,
                                            MultiObjectiveStats* stats,
-                                           std::string* reason);
+                                           std::string* reason,
+                                           int gpu_version = 2);
 
 // ---------------------------------------------------------------
 // Shared MDD CUDA definitions used by both top-down and coupled approaches
@@ -76,6 +78,7 @@ bool expand_layer_cuda(
     thrust::device_vector<int>& d_next_sizes,
     thrust::device_vector<int>& d_next_offsets,
     thrust::device_vector<ObjType>& d_next_points,
-    std::string* reason);
+    std::string* reason,
+    int gpu_version = 2);
 
 #endif

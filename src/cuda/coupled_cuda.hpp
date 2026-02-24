@@ -19,6 +19,7 @@ bool coupled_cuda_available(std::string* reason);
 // Returns NULL on failure and fills reason when provided.
 ParetoFrontier* coupled_cuda_enumerate(MDD* mdd,
                                        MultiObjectiveStats* stats,
-                                       std::string* reason);
+                                       std::string* reason,
+                                       int gpu_version = 2);
 
 #endif

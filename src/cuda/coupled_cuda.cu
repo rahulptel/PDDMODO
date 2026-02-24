@@ -46,7 +46,7 @@ inline bool sync_kernel(const char* where, std::string* reason) {
     return cuda_ok(cudaDeviceSynchronize(), where, reason);
 }
 
-inline int ceil_div(int a, int b) { return (a + b - 1) / b; }
+__host__ __device__ inline int ceil_div(int a, int b) { return (a + b - 1) / b; }
 
 // ---------------------------------------------------------------
 // Kernels (same patterns as topdown_cuda.cu, adapted for MDD)
@@ -65,12 +65,17 @@ __global__ void compute_edge_counts_kernel(const int* edge_src,
 __global__ void compute_dst_candidate_counts_kernel(const int* in_edge_offsets,
                                                     const int* edge_offsets,
                                                     int next_nodes,
-                                                    int* dst_counts) {
+                                                    int* dst_counts,
+                                                    int* dst_blocks) {
     const int dst = blockIdx.x * blockDim.x + threadIdx.x;
     if (dst >= next_nodes) return;
     const int eb = in_edge_offsets[dst];
     const int ee = in_edge_offsets[dst + 1];
-    dst_counts[dst] = edge_offsets[ee] - edge_offsets[eb];
+    const int count = edge_offsets[ee] - edge_offsets[eb];
+    dst_counts[dst] = count;
+    if (dst_blocks) {
+        dst_blocks[dst] = ceil_div(count, kThreadsPerBlock);
+    }
 }
 
 __global__ void expand_candidates_points_kernel(const int* edge_src,
@@ -104,22 +109,131 @@ __global__ void expand_candidates_points_kernel(const int* edge_src,
     }
 }
 
-__global__ void mark_dominated_tiled_kernel(const ObjType* points,
-                                            const int* in_edge_offsets,
-                                            const int* edge_offsets,
-                                            int next_nodes,
-                                            int* alive,
-                                            int* next_sizes) {
+// Binary search helper device function
+__device__ int find_dst_node(int block_idx, const int* block_offsets, int next_nodes) {
+    int low = 0, high = next_nodes;
+    while (low < high) {
+        int mid = low + (high - low) / 2;
+        if (block_idx < block_offsets[mid + 1]) {
+            high = mid;
+        } else {
+            low = mid + 1;
+        }
+    }
+    return low;
+}
+
+__global__ void mark_dominated_by_dst_tiled_kernel(const ObjType* points,
+                                                   const int* in_edge_offsets,
+                                                   const int* edge_offsets,
+                                                   int next_nodes,
+                                                   int* alive,
+                                                   int* next_sizes) {
     const int dst = blockIdx.x;
-    if (dst >= next_nodes) return;
+    if (dst >= next_nodes) {
+        return;
+    }
     const int tile_i = blockIdx.y;
+
+    const int edge_begin = in_edge_offsets[dst];
+    const int edge_end = in_edge_offsets[dst + 1];
+    const int begin = edge_offsets[edge_begin];
+    const int end = edge_offsets[edge_end];
+    const int len = end - begin;
+    if (len <= 0) {
+        return;
+    }
+
+    const int local_i = tile_i * blockDim.x + threadIdx.x;
+    const bool valid_i = (local_i < len);
+    const int i = begin + local_i;
+
+    ObjType point_i[NOBJS];
+    if (valid_i) {
+        #pragma unroll
+        for (int o = 0; o < NOBJS; ++o) {
+            point_i[o] = points[i * NOBJS + o];
+        }
+    }
+
+    bool dominated = false;
+
+    __shared__ ObjType sh_points[kThreadsPerBlock * NOBJS];
+    for (int j_base = 0; j_base < len; j_base += blockDim.x) {
+        const int j_local = j_base + threadIdx.x;
+        if (j_local < len) {
+            const int j = begin + j_local;
+            #pragma unroll
+            for (int o = 0; o < NOBJS; ++o) {
+                sh_points[threadIdx.x * NOBJS + o] = points[j * NOBJS + o];
+            }
+        }
+        __syncthreads();
+
+        if (valid_i && !dominated) {
+            const int remaining = len - j_base;
+            const int tile_count = (remaining < blockDim.x ? remaining : blockDim.x);
+            for (int jj = 0; jj < tile_count && !dominated; ++jj) {
+                const int local_j = j_base + jj;
+                if (local_j == local_i) {
+                    continue;
+                }
+
+                bool ge_all = true;
+                bool strict = false;
+                #pragma unroll
+                for (int o = 0; o < NOBJS; ++o) {
+                    const ObjType a = sh_points[jj * NOBJS + o];
+                    const ObjType b = point_i[o];
+                    ge_all = ge_all && (a >= b);
+                    strict = strict || (a > b);
+                }
+                if (ge_all && (strict || (local_j < local_i))) {
+                    dominated = true;
+                }
+            }
+        }
+        __syncthreads();
+    }
+
+    const int keep = (valid_i && !dominated) ? 1 : 0;
+    if (valid_i) {
+        alive[i] = keep;
+    }
+
+    __shared__ int live_sh[kThreadsPerBlock];
+    live_sh[threadIdx.x] = keep;
+    __syncthreads();
+    for (int offset = blockDim.x / 2; offset > 0; offset >>= 1) {
+        if (threadIdx.x < offset) {
+            live_sh[threadIdx.x] += live_sh[threadIdx.x + offset];
+        }
+        __syncthreads();
+    }
+    if (threadIdx.x == 0) {
+        atomicAdd(&next_sizes[dst], live_sh[0]);
+    }
+}
+
+// mark_dominated_1d_kernel uses a strictly load balanced 1D grid.
+__global__ void mark_dominated_1d_kernel(const ObjType* points,
+                                         const int* in_edge_offsets,
+                                         const int* edge_offsets,
+                                         const int* block_offsets,
+                                         int next_nodes,
+                                         int* alive,
+                                         int* next_sizes) {
+    const int bidx = blockIdx.x;
+    const int dst = find_dst_node(bidx, block_offsets, next_nodes);
+    if (dst >= next_nodes) return;
+
+    const int tile_i = bidx - block_offsets[dst];
 
     const int eb = in_edge_offsets[dst];
     const int ee = in_edge_offsets[dst + 1];
     const int begin = edge_offsets[eb];
     const int end = edge_offsets[ee];
     const int len = end - begin;
-    if (len <= 0) return;
 
     const int li = tile_i * blockDim.x + threadIdx.x;
     const bool valid = (li < len);
@@ -144,8 +258,9 @@ __global__ void mark_dominated_tiled_kernel(const ObjType* points,
         __syncthreads();
         if (valid && !dom) {
             const int tc = min(len - jb, (int)blockDim.x);
-            for (int jj = 0; jj < tc && !dom; ++jj) {
+            for (int jj = 0; jj < tc; ++jj) {
                 const int lj = jb + jj;
+
                 if (lj == li) continue;
                 bool ge = true, strict = false;
                 #pragma unroll
@@ -153,7 +268,10 @@ __global__ void mark_dominated_tiled_kernel(const ObjType* points,
                     ge = ge && (sh[jj * NOBJS + o] >= pi[o]);
                     strict = strict || (sh[jj * NOBJS + o] > pi[o]);
                 }
-                if (ge && (strict || lj < li)) dom = true;
+                if (ge && (strict || (lj < li))) {
+                    dom = true;
+                    break;
+                }
             }
         }
         __syncthreads();
@@ -170,51 +288,6 @@ __global__ void mark_dominated_tiled_kernel(const ObjType* points,
         __syncthreads();
     }
     if (threadIdx.x == 0) atomicAdd(&next_sizes[dst], lv[0]);
-}
-
-__global__ void mark_dominated_single_kernel(const ObjType* points,
-                                             const int* in_edge_offsets,
-                                             const int* edge_offsets,
-                                             int next_nodes,
-                                             int* alive,
-                                             int* next_sizes) {
-    const int dst = blockIdx.x;
-    if (dst >= next_nodes) return;
-
-    const int eb = in_edge_offsets[dst];
-    const int ee = in_edge_offsets[dst + 1];
-    const int begin = edge_offsets[eb];
-    const int end = edge_offsets[ee];
-    const int len = end - begin;
-
-    int live = 0;
-    for (int li = threadIdx.x; li < len; li += blockDim.x) {
-        const int i = begin + li;
-        bool dom = false;
-        for (int lj = 0; lj < len && !dom; ++lj) {
-            if (li == lj) continue;
-            const int j = begin + lj;
-            bool ge = true, strict = false;
-            #pragma unroll
-            for (int o = 0; o < NOBJS; ++o) {
-                ge = ge && (points[j * NOBJS + o] >= points[i * NOBJS + o]);
-                strict = strict || (points[j * NOBJS + o] > points[i * NOBJS + o]);
-            }
-            if (ge && (strict || lj < li)) dom = true;
-        }
-        const int k = dom ? 0 : 1;
-        alive[i] = k;
-        live += k;
-    }
-
-    __shared__ int lv[kThreadsPerBlock];
-    lv[threadIdx.x] = live;
-    __syncthreads();
-    for (int off = blockDim.x / 2; off > 0; off >>= 1) {
-        if (threadIdx.x < off) lv[threadIdx.x] += lv[threadIdx.x + off];
-        __syncthreads();
-    }
-    if (threadIdx.x == 0) next_sizes[dst] = lv[0];
 }
 
 __global__ void scatter_alive_kernel(const int* alive,
@@ -394,6 +467,8 @@ __global__ void mark_frontier_dominated_kernel(
     if (valid) alive[i] = dom ? 0 : 1;
 }
 
+// Removed functors for global sorting since they break edge_offsets mapping
+
 } // anonymous namespace
 
 // ---------------------------------------------------------------
@@ -411,7 +486,8 @@ bool expand_layer_cuda(
     thrust::device_vector<int>& d_next_sizes,
     thrust::device_vector<int>& d_next_offsets,
     thrust::device_vector<ObjType>& d_next_points,
-    std::string* reason)
+    std::string* reason,
+    int gpu_version)
 {
     d_next_sizes.assign(next_nodes, 0);
     d_next_offsets.assign(next_nodes + 1, 0);
@@ -456,38 +532,63 @@ bool expand_layer_cuda(
         thrust::raw_pointer_cast(d_cand.data()));
     if (!sync_kernel("expand_cand", reason)) return false;
 
-    // Per-destination dominance filtering
-    thrust::device_vector<int> d_alive(total_cand, 0);
+    // Segmented sort of candidates by First Objective (Descending)
+    // To do segmented sort with Thrust efficiently when we only have segment offsets 
+    // (in_edge_offsets + d_eo for final offsets), we can create a segment-ID array 
+    // and use thrust::sort_by_key or write a custom segmented sort.
+    // However, for Pareto optimization, a simple `thrust::sort_by_key` with node IDs as primary keys
+    // and Obj0 as secondary keys (descending) is very effective.
+    
+    // First, generate the node IDs for each candidate
+    thrust::device_vector<int> d_cand_nodes(total_cand);
+    // We already have destination node counts in d_cc. Let's compute it along with block counts.
     thrust::device_vector<int> d_cc(next_nodes, 0);
+    thrust::device_vector<int> d_blocks(next_nodes, 0);
 
     compute_dst_candidate_counts_kernel<<<ceil_div(next_nodes, kThreadsPerBlock), kThreadsPerBlock>>>(
         thrust::raw_pointer_cast(in_edge_offsets.data()),
         thrust::raw_pointer_cast(d_eo.data()),
         next_nodes,
-        thrust::raw_pointer_cast(d_cc.data()));
+        thrust::raw_pointer_cast(d_cc.data()),
+        thrust::raw_pointer_cast(d_blocks.data()));
     if (!sync_kernel("dst_counts", reason)) return false;
 
-    const int max_seg = thrust::reduce(d_cc.begin(), d_cc.end(), 0, thrust::maximum<int>());
-    if (max_seg > 0) {
-        if (max_seg > kThreadsPerBlock) {
-            dim3 grid(next_nodes, ceil_div(max_seg, kThreadsPerBlock));
-            mark_dominated_tiled_kernel<<<grid, kThreadsPerBlock>>>(
+    // We no longer sort globally. Candidates remain exactly in the order
+    // defined by in_edge_offsets and block_offsets mapping.
+    
+    thrust::device_vector<int> d_alive(total_cand, 0);
+
+    if (gpu_version == 1) {
+        // v1: Dense 2D grid allocation
+        const int max_seg = thrust::reduce(d_cc.begin(), d_cc.end(), 0, thrust::maximum<int>());
+        dim3 mark_grid(next_nodes, ceil_div(max_seg, kThreadsPerBlock));
+        mark_dominated_by_dst_tiled_kernel<<<mark_grid, kThreadsPerBlock>>>(
+            thrust::raw_pointer_cast(d_cand.data()),
+            thrust::raw_pointer_cast(in_edge_offsets.data()),
+            thrust::raw_pointer_cast(d_eo.data()),
+            next_nodes,
+            thrust::raw_pointer_cast(d_alive.data()),
+            thrust::raw_pointer_cast(d_next_sizes.data()));
+        if (!sync_kernel("dom_v1", reason)) return false;
+    } else {
+        // v2: perfectly load-balanced 1D grid
+        // Calculate 1D grid parameters
+        thrust::device_vector<int> d_block_offsets(next_nodes + 1, 0);
+        thrust::exclusive_scan(d_blocks.begin(), d_blocks.end(), d_block_offsets.begin());
+        d_block_offsets[next_nodes] = thrust::reduce(d_blocks.begin(), d_blocks.end(), 0);
+
+        const int total_blocks = d_block_offsets[next_nodes];
+        
+        if (total_blocks > 0) {
+            mark_dominated_1d_kernel<<<total_blocks, kThreadsPerBlock>>>(
                 thrust::raw_pointer_cast(d_cand.data()),
                 thrust::raw_pointer_cast(in_edge_offsets.data()),
                 thrust::raw_pointer_cast(d_eo.data()),
+                thrust::raw_pointer_cast(d_block_offsets.data()),
                 next_nodes,
                 thrust::raw_pointer_cast(d_alive.data()),
                 thrust::raw_pointer_cast(d_next_sizes.data()));
-            if (!sync_kernel("dom_tiled", reason)) return false;
-        } else {
-            mark_dominated_single_kernel<<<next_nodes, kThreadsPerBlock>>>(
-                thrust::raw_pointer_cast(d_cand.data()),
-                thrust::raw_pointer_cast(in_edge_offsets.data()),
-                thrust::raw_pointer_cast(d_eo.data()),
-                next_nodes,
-                thrust::raw_pointer_cast(d_alive.data()),
-                thrust::raw_pointer_cast(d_next_sizes.data()));
-            if (!sync_kernel("dom_single", reason)) return false;
+            if (!sync_kernel("dom_1d", reason)) return false;
         }
     }
 
@@ -544,7 +645,8 @@ bool coupled_cuda_available(std::string* reason) {
 
 ParetoFrontier* coupled_cuda_enumerate(MDD* mdd,
                                        MultiObjectiveStats* stats,
-                                       std::string* reason) {
+                                       std::string* reason,
+                                       int gpu_version) {
     using std::cout;
     using std::endl;
 
@@ -680,7 +782,7 @@ ParetoFrontier* coupled_cuda_enumerate(MDD* mdd,
                     packed[layer_td].td_num_edges,
                     nn,
                     d_td_offsets, d_td_points,
-                    d_ns, d_no, d_np, reason))
+                    d_ns, d_no, d_np, reason, gpu_version))
                 return NULL;
             t1 = clock();
             double td_elapsed = (double)(t1-t0)/CLOCKS_PER_SEC;
@@ -713,7 +815,7 @@ ParetoFrontier* coupled_cuda_enumerate(MDD* mdd,
                     packed[layer_bu].bu_num_edges,
                     nn,
                     d_bu_offsets, d_bu_points,
-                    d_ns, d_no, d_np, reason))
+                    d_ns, d_no, d_np, reason, gpu_version))
                 return NULL;
             t1 = clock();
             double bu_elapsed = (double)(t1-t0)/CLOCKS_PER_SEC;

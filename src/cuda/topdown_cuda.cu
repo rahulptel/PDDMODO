@@ -604,7 +604,8 @@ ParetoFrontier* topdown_cuda_enumerate(BDD* bdd,
                                        const int problem_type,
                                        const int dominance_strategy,
                                        MultiObjectiveStats* stats,
-                                       std::string* reason) {
+                                       std::string* reason,
+                                       int gpu_version) {
     if (bdd == NULL) {
         set_reason(reason, "BDD pointer is NULL");
         return NULL;
@@ -900,7 +901,8 @@ ParetoFrontier* topdown_cuda_enumerate(BDD* bdd,
 
 ParetoFrontier* topdown_mdd_cuda_enumerate(MDD* mdd,
                                            MultiObjectiveStats* stats,
-                                           std::string* reason) {
+                                           std::string* reason,
+                                           int gpu_version) {
     using std::cout;
     using std::endl;
 
@@ -966,14 +968,14 @@ ParetoFrontier* topdown_mdd_cuda_enumerate(MDD* mdd,
         thrust::device_vector<ObjType> d_np;
 
         t0 = clock();
-        if (!expand_layer_cuda(
-                packed[l].td_in_edge_offsets,
-                packed[l].td_edge_src,
-                packed[l].td_edge_weights,
-                packed[l].td_num_edges,
-                nn,
-                d_td_offsets, d_td_points,
-                d_ns, d_no, d_np, reason)) {
+            if (!expand_layer_cuda(
+                    packed[l].td_in_edge_offsets,
+                    packed[l].td_edge_src,
+                    packed[l].td_edge_weights,
+                    packed[l].td_num_edges,
+                    nn,
+                    d_td_offsets, d_td_points,
+                    d_ns, d_no, d_np, reason, gpu_version)) {
             return NULL;
         }
         t1 = clock();
