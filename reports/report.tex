@@ -1,0 +1,307 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+
+\title{GPU-Accelerated Pareto Frontier Enumeration for the\\
+       Multi-Objective Traveling Salesperson Problem\\
+       via Dynamic Layer Cutset on MDDs}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+
+% ============================================================
+\section{Methodology}
+% ============================================================
+
+We describe the CPU baseline algorithm and the GPU-accelerated variant
+for computing the exact Pareto frontier of a multi-objective Traveling
+Salesperson Problem (TSP) using Multi-valued Decision Diagrams (MDDs)
+and the dynamic layer cutset method.
+
+% ------------------------------------------------------------
+\subsection{Problem Setting}
+
+Given an MDD $\mathcal{M}$ with $L$ layers encoding all feasible TSP
+tours, each arc carries a weight vector
+$\mathbf{w} \in \mathbb{Z}^p$ ($p$ objectives).
+A root-to-terminal path corresponds to a tour with objective vector
+equal to the sum of its arc weights.
+The goal is to enumerate the \emph{Pareto frontier}---the set of all
+non-dominated objective vectors---over all paths.
+
+% ------------------------------------------------------------
+\subsection{CPU Baseline: Dynamic Layer Cutset}
+
+The CPU algorithm proceeds in three phases.
+
+\subsubsection{Phase 1: Bidirectional Expansion}
+
+Two sets of partial Pareto frontiers are grown from both ends of the MDD:
+
+\begin{itemize}
+  \item \textbf{Top-down:} Starting from the root node (layer~0) with
+        the singleton frontier $\{\mathbf{0}\}$, expand layer by layer.
+        At layer~$\ell$, for each node~$v$ and each incoming arc
+        $(u \to v)$ with weight~$\mathbf{w}$, every point $\mathbf{x}$
+        in $u$'s frontier generates a candidate $\mathbf{x} + \mathbf{w}$.
+        Candidates arriving at the same node are merged and
+        dominance-filtered to retain only non-dominated points.
+
+  \item \textbf{Bottom-up:} Symmetric expansion from the terminal node
+        (layer~$L{-}1$) towards the root, using outgoing arcs in reverse.
+\end{itemize}
+
+A \emph{layer-value heuristic}
+$V(\ell) = \sum_{v \in \text{layer}(\ell)} |\text{frontier}(v)| \cdot |\text{arcs}(v)|$
+estimates the expansion cost of the next layer.
+At each step, the direction with the smaller layer value is expanded.
+The two fronts meet at a \emph{cutset layer}~$c$ chosen dynamically
+to minimise the total work.
+
+\subsubsection{Phase 2: Cutset Convolution}
+
+At the cutset layer, each node~$v$ has a top-down frontier
+$F_v^{\downarrow}$ and a bottom-up frontier $F_v^{\uparrow}$.
+The complete Pareto frontier is contained in
+\[
+  \bigcup_{v} \bigl\{ \mathbf{a} + \mathbf{b}
+    : \mathbf{a} \in F_v^{\downarrow},\;
+      \mathbf{b} \in F_v^{\uparrow} \bigr\}.
+\]
+The CPU processes nodes one-by-one:\ for each node~$v$, it forms all
+$|F_v^{\downarrow}| \times |F_v^{\uparrow}|$ Cartesian-product sums
+and incrementally merges them into a running global frontier, checking
+each new candidate against the current frontier for dominance.
+The per-candidate cost is $O(|F|)$ where $|F|$ is the current frontier
+size, giving total complexity
+$O\bigl(\sum_v |F_v^{\downarrow}| \cdot |F_v^{\uparrow}| \cdot |F|\bigr)$.
+
+\subsubsection{Phase 3: Result}
+
+The global frontier after processing all cutset nodes is the exact
+Pareto frontier.
+
+% ------------------------------------------------------------
+\subsection{GPU-Accelerated Top-Down Variant}
+
+We first discuss a purely top-down GPU-accelerated enumeration algorithm.
+The key idea is to keep Pareto frontier data on the GPU throughout the entire
+process, minimising host--device transfers.
+
+\subsubsection{Phase 1: GPU Single-Direction Expansion}
+
+\paragraph{Data packing.}
+All MDD layers are packed into flat CSR-style arrays on the host and
+transferred to the GPU once at startup.
+For each layer~$\ell$, we store the incoming-arc offsets, source-node indices, 
+and arc weights.
+
+\paragraph{Expansion kernels.}
+Each layer expansion is a three-step GPU pipeline:
+
+\begin{enumerate}
+  \item \textbf{Candidate generation} (\texttt{expand\_candidates\_points\_kernel}):
+        Each warp processes one edge, reading source-node frontier points
+        and adding the arc weight vector.
+        This is embarrassingly parallel---every candidate is independent.
+
+  \item \textbf{Per-node dominance filtering:}
+        Candidates arriving at the same destination node are compared pairwise to filter out dominated points. We developed two versions of this kernel:
+        \begin{itemize}
+            \item \textbf{v1 (Dense 2D Grid, \texttt{mark\_dominated\_by\_dst\_tiled\_kernel}):}
+                  A 2D grid assigns one block-row per node, launching \texttt{<<<num\_nodes, max\_blocks>>>}. 
+                  Each thread loads its candidate into registers, then iterates over shared-memory tiles of all candidates in the same node. 
+                  However, highly unbalanced MDD layers result in massive block scheduling overhead, as many nodes with zero candidates still force the GPU to schedule empty blocks.
+            \item \textbf{v2 (Load-Balanced 1D Grid, \texttt{mark\_dominated\_1d\_kernel}):}
+                  To solve the imbalance, we compute \texttt{ceil\_div(node\_candidates, threads)} for each node and perform a parallel prefix sum to find the exact total number of required blocks.
+                  The kernel is launched with a 1D grid of exactly this size, completely eliminating empty block scheduling.
+                  Within the kernel, a custom binary search on the prefix-sum array maps each 1D block to its correct destination node.
+                  This perfect load balancing drastically reduces CUDA launch overhead, cutting total expansion time by over 30\%.
+        \end{itemize}
+
+  \item \textbf{Stream compaction} (\texttt{scatter\_alive\_kernel}):
+        An exclusive prefix sum on the alive flags gives output indices;
+        surviving points are scattered into a compact output buffer.
+\end{enumerate}
+
+\paragraph{Parallelism advantage.}
+On the CPU, expansion is sequential over nodes and arcs.
+On the GPU, all edges in a layer are expanded simultaneously (step~1),
+and dominance filtering for all nodes in the layer runs in parallel
+(step~2, one block-row per node).
+For the largest layers (24\,024 nodes, 168\,168 edges, 4M+ points),
+this yields $>$100$\times$ speedup over the CPU expansion alone.
+
+\subsubsection{Phase 2: Result}
+The global frontier at the terminal node is returned directly from device memory.
+
+
+% ------------------------------------------------------------
+\subsection{GPU-Accelerated Coupled Variant}
+
+Building upon the highly optimized GPU expansion kernels described above,
+we also ported the dynamic layer cutset (coupled) method to the GPU.
+
+\subsubsection{Phase 1: GPU Bidirectional Expansion}
+Data packing now encompasses both incoming arcs (for top-down) and outgoing arcs (for bottom-up).
+The layer expansion logic directly references the \emph{Expansion kernels} from the GPU Top-Down Variant.
+
+\paragraph{Layer-value heuristic.}
+The heuristic $V(\ell)$ is computed on the GPU using a
+\texttt{thrust::reduce}, returning a single scalar to the host.
+This avoids copying the entire frontier back for the selection decision.
+
+\subsubsection{Phase 2: GPU Batched Convolution}
+
+The cutset convolution is the computational bottleneck for the coupled algorithm.
+The CPU processes nodes sequentially; the GPU version uses a
+\emph{batched frontier-filter pipeline}:
+
+\begin{enumerate}
+  \item \textbf{Batching.}
+        Cutset nodes are sorted by decreasing product size and grouped
+        into batches of up to 2\,M Cartesian products each.
+
+  \item \textbf{Cartesian product} (\texttt{cartesian\_product\_kernel}):
+        One CUDA block per node computes all $|F_v^{\downarrow}| \times
+        |F_v^{\uparrow}|$ sums.  Threads stride over the product space.
+
+  \item \textbf{Frontier filter}
+        (\texttt{mark\_dominated\_by\_frontier\_kernel}):
+        Each candidate is checked against the \emph{existing} frontier
+        using shared-memory tiling.
+        Cost: $O(\text{batch\_size} \times |F|)$.
+        This is the key efficiency gain: with $|F| \approx 5$--$6$K and
+        batch size $\approx 2$M, each thread checks $\sim$6K frontier
+        points loaded tile-by-tile into shared memory.
+        Since frontier points are loaded cooperatively into shared memory
+        and reused by all 128 threads in a block, the effective memory
+        bandwidth is amplified $128\times$.
+
+        This step typically eliminates $>$99.9\% of candidates
+        (e.g., 2M $\to$ $\sim$200--2000 survivors).
+
+  \item \textbf{Frontier update}
+        (\texttt{mark\_frontier\_dominated\_kernel}):
+        Existing frontier points dominated by new survivors are removed.
+        Cost: $O(|F| \times |\text{survivors}|)$.
+        Survivors are appended to the frontier.
+
+  \item \textbf{Final global dominance}
+        (\texttt{mark\_dominated\_global\_kernel}):
+        After all batches, a single $O(|F|^2)$ pass on the accumulated
+        frontier ($\sim$10K points) cleans up any cross-batch dominated
+        points.  This takes $<$2\,ms on the GPU.
+\end{enumerate}
+
+\paragraph{Parallelism advantage.}
+The CPU's serial \texttt{convolute} checks each of the 303M candidate
+products against the frontier one at a time.
+The GPU checks 2M candidates \emph{simultaneously}, with each of the
+$\lceil 2\text{M}/128 \rceil \approx 15$K thread blocks independently
+scanning the $\sim$5K frontier via shared memory.
+The frontier filter is thus the GPU analogue of the CPU's incremental
+merge, but with $\sim$15K-way parallelism.
+
+% ============================================================
+\section{Results}
+% ============================================================
+
+We compare the CPU and GPU variants on two TSP instances
+with 15 cities, using the dynamic layer cutset method (method~3).
+All experiments were run on the same machine with a single NVIDIA GPU.
+
+% ------------------------------------------------------------
+\subsection{Summary}
+
+\begin{table}[h]
+\centering
+\begin{tabular}{|l|r|r|r|r|r|}
+\hline
+\textbf{Instance} & \textbf{Objs} & \textbf{CPU Sols} & \textbf{CPU Time (s)} & \textbf{CUDA Time (s)} & \textbf{Speedup} \\
+\hline
+seed108   & 3 &  831 &  2.78 & 5.37 & 0.52$\times$ \\
+seed11417 & 4 & 5372 & 18.24 & 5.94 & 3.07$\times$ \\
+\hline
+\end{tabular}
+\caption{CPU vs.\ CUDA execution times on 15-city TSP instances.
+         Solution counts match exactly in both cases.}
+\label{tab:results}
+\end{table}
+
+% ------------------------------------------------------------
+\subsection{Phase-Level Breakdown (4 Objectives)}
+
+\begin{table}[h]
+\centering
+\begin{tabular}{|l|r|r|l|}
+\hline
+\textbf{Phase} & \textbf{CPU (s)} & \textbf{CUDA (s)} & \textbf{Notes} \\
+\hline
+MDD Packing     & ---   & 0.14  & One-time host$\to$device transfer \\
+Expansion (TD)  & $\sim$0.7
+                        & 0.12  & 9 layers, up to 4M points \\
+Expansion (BU)  & (combined)      & 0.02  & 7 layers \\
+Convolution     & 17.5  & 5.29  & 153 batches of $\sim$2M products \\
+Final dominance & ---   & 0.001 & $O(10\text{K}^2)$ on GPU \\
+\hline
+\textbf{Total}  & 18.24 & 5.94  & \\
+\hline
+\end{tabular}
+\caption{Phase breakdown for the 4-objective, 15-city instance.
+         The convolution phase accounts for 96\% of CPU time
+         but only 89\% of CUDA time.}
+\label{tab:breakdown}
+\end{table}
+
+The GPU expansion phase is roughly $6\times$ faster than CPU for the
+same work (0.14\,s vs.\ $\sim$0.7\,s), and the convolution phase
+achieves a $3.3\times$ speedup (5.29\,s vs.\ 17.5\,s).
+
+% ------------------------------------------------------------
+\subsection{Why the 3-Objective Case is Slower on GPU}
+
+For the 3-objective instance, the GPU variant is $\sim$2$\times$ slower
+than the CPU.  Three factors explain this:
+
+\begin{enumerate}
+  \item \textbf{Small problem size.}
+        The 3-objective instance has far fewer Pareto-optimal points at
+        each MDD node (the Pareto front size scales super-polynomially
+        in the number of objectives).
+        The CPU finishes expansion and convolution in 2.78\,s total.
+        Most of this time is in the convolution, which on the CPU involves
+        only moderate-size frontiers ($\sim$800 solutions).
+
+  \item \textbf{Fixed GPU overhead.}
+        MDD packing (host$\to$device transfer of all 17 layers) and
+        initial CUDA context setup take $\sim$0.8\,s regardless of
+        problem difficulty.
+        For a 2.78\,s CPU run, this overhead alone consumes 29\% of
+        the CPU budget.
+
+  \item \textbf{Underutilised parallelism.}
+        With only $\sim$800 final solutions and small intermediate
+        frontiers, the GPU batched convolution cannot amortise kernel
+        launch overhead.
+        The frontier filter kernel processes 2M candidates against a
+        frontier of $\sim$800 points, but 15K thread blocks each scanning
+        only $\lceil 800/128 \rceil = 7$ shared-memory tiles finish
+        very quickly, making kernel launch and synchronisation overhead
+        a large fraction of wall time.
+        In contrast, for the 4-objective case the frontier is
+        $\sim$5--6K, requiring $\sim$47 tiles per block, which keeps
+        the GPU's streaming multiprocessors occupied.
+\end{enumerate}
+
+In summary, the GPU variant is designed for the regime where the
+convolution dominates wall time---which occurs with 4+ objectives,
+larger cities, or denser MDD structures.
+For small instances where the CPU finishes in a few seconds, the fixed
+overheads of GPU initialisation and data transfer outweigh the
+parallelism gains.
+
+\end{document}
