@@ -604,7 +604,8 @@ ParetoFrontier* topdown_cuda_enumerate(BDD* bdd,
                                        const int problem_type,
                                        const int dominance_strategy,
                                        MultiObjectiveStats* stats,
-                                       std::string* reason) {
+                                       std::string* reason,
+                                       int gpu_version) {
     if (bdd == NULL) {
         set_reason(reason, "BDD pointer is NULL");
         return NULL;
@@ -891,5 +892,133 @@ ParetoFrontier* topdown_cuda_enumerate(BDD* bdd,
     if (reason != NULL) {
         reason->clear();
     }
+    return frontier;
+}
+
+// ---------------------------------------------------------------
+// MDD GPU Top-Down Enumeration
+// ---------------------------------------------------------------
+
+ParetoFrontier* topdown_mdd_cuda_enumerate(MDD* mdd,
+                                           MultiObjectiveStats* stats,
+                                           std::string* reason,
+                                           int gpu_version) {
+    using std::cout;
+    using std::endl;
+
+    if (mdd == NULL) { set_reason(reason, "MDD is NULL"); return NULL; }
+    if (mdd->num_layers <= 0) { set_reason(reason, "MDD has zero layers"); return NULL; }
+    if (!topdown_cuda_available(reason)) return NULL;
+    if (!cuda_ok(cudaSetDevice(0), "cudaSetDevice", reason)) return NULL;
+
+    const int num_layers = mdd->num_layers;
+    clock_t t0, t1;
+
+    // 1. Pack top-down layers
+    t0 = clock();
+    std::vector<PackedMDDLayer> packed(num_layers);
+    for (int l = 0; l < num_layers; ++l) {
+        const int nn = mdd->layers[l].size();
+        packed[l].num_nodes = nn;
+
+        if (l > 0) {
+            std::vector<int> h_off(nn + 1, 0);
+            for (int d = 0; d < nn; ++d)
+                h_off[d + 1] = h_off[d] + mdd->layers[l][d]->in_arcs_list.size();
+            const int ne = h_off[nn];
+            std::vector<int> h_src(ne);
+            std::vector<ObjType> h_wt(ne * NOBJS);
+            int idx = 0;
+            for (int d = 0; d < nn; ++d) {
+                for (MDDArc* a : mdd->layers[l][d]->in_arcs_list) {
+                    h_src[idx] = a->tail->index;
+                    for (int o = 0; o < NOBJS; ++o)
+                        h_wt[idx * NOBJS + o] = a->weights[o];
+                    ++idx;
+                }
+            }
+            packed[l].td_num_edges = ne;
+            packed[l].td_in_edge_offsets = h_off;
+            packed[l].td_edge_src = h_src;
+            packed[l].td_edge_weights = h_wt;
+        } else {
+            packed[l].td_num_edges = 0;
+        }
+    }
+    t1 = clock();
+    cout << "[CUDA] TD Packing: " << (double)(t1-t0)/CLOCKS_PER_SEC << "s (" << num_layers << " layers)" << endl;
+
+    // 2. Initialize frontier at root
+    const int root_nodes = packed[0].num_nodes;
+    const int root_idx = mdd->get_root()->index;
+
+    thrust::host_vector<int> h_td_sizes(root_nodes, 0);
+    h_td_sizes[root_idx] = 1;
+    thrust::device_vector<int> d_td_sizes = h_td_sizes;
+    thrust::device_vector<int> d_td_offsets(root_nodes + 1, 0);
+    thrust::exclusive_scan(d_td_sizes.begin(), d_td_sizes.end(), d_td_offsets.begin());
+    d_td_offsets[root_nodes] = 1;
+    thrust::device_vector<ObjType> d_td_points(NOBJS, 0); // single point (0,0...)
+
+    // 3. Expand layer by layer
+    double total_td_time = 0.0;
+    for (int l = 1; l < num_layers; ++l) {
+        const int nn = packed[l].num_nodes;
+        thrust::device_vector<int> d_ns, d_no;
+        thrust::device_vector<ObjType> d_np;
+
+        t0 = clock();
+            if (!expand_layer_cuda(
+                    packed[l].td_in_edge_offsets,
+                    packed[l].td_edge_src,
+                    packed[l].td_edge_weights,
+                    packed[l].td_num_edges,
+                    nn,
+                    d_td_offsets, d_td_points,
+                    d_ns, d_no, d_np, reason, gpu_version)) {
+            return NULL;
+        }
+        t1 = clock();
+        double elapsed = (double)(t1-t0)/CLOCKS_PER_SEC;
+        total_td_time += elapsed;
+
+        int total_pts = thrust::reduce(d_ns.begin(), d_ns.end(), 0);
+        cout << "[CUDA] TD expand layer " << l << ": "
+             << nn << " nodes, " << packed[l].td_num_edges << " edges, "
+             << total_pts << " pts, " << elapsed << "s" << endl;
+
+        d_td_sizes.swap(d_ns);
+        d_td_offsets.swap(d_no);
+        d_td_points.swap(d_np);
+    }
+    cout << "[CUDA] TD Expansion done, total time: " << total_td_time << "s" << endl;
+
+    // 4. Extract points from terminal node
+    const int term_idx = mdd->get_terminal()->index;
+    const int term_nodes = packed[num_layers - 1].num_nodes;
+    
+    thrust::host_vector<int> h_offsets = d_td_offsets;
+    if (term_idx < 0 || term_idx >= term_nodes) {
+        set_reason(reason, "Invalid terminal index");
+        return NULL;
+    }
+
+    const int begin = h_offsets[term_idx];
+    const int end = h_offsets[term_idx + 1];
+    const int num_points = std::max(0, end - begin);
+
+    ParetoFrontier* frontier = new ParetoFrontier;
+    frontier->sols.resize(num_points * NOBJS, 0);
+    if (num_points > 0) {
+        thrust::host_vector<ObjType> h_points = d_td_points;
+        std::copy(h_points.begin() + begin * NOBJS,
+                  h_points.begin() + end * NOBJS,
+                  frontier->sols.begin());
+    }
+
+    // Optional: we can apply a final sort/dominance filter here if we expect duplicate equivalent paths, 
+    // but the node dominance filter inside `expand_layer_cuda` handles standard local state dominance.
+
+    if (reason != NULL) reason->clear();
     return frontier;
 }
