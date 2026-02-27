@@ -10,6 +10,14 @@ From the project root:
 make NUM_OBJS=3
 ```
 
+This default build is CPU-serial (OpenMP disabled unless explicitly enabled).
+
+CPU build with OpenMP acceleration:
+
+```bash
+make NUM_OBJS=3 ENABLE_OPENMP=1
+```
+
 CPU-only build (no `nvcc` required):
 
 ```bash
@@ -42,8 +50,11 @@ Backend selection (optional; defaults to CPU):
   - `gpu [kernel]`
 
 CPU options:
-- `--cpu-threads <N>`: positive integer thread count for CPU enumeration.
-- if CPU backend is selected and no thread count is provided, `OMP_NUM_THREADS` is used when valid; otherwise defaults to `1`.
+- `--cpu-threads <N>`: positive integer thread count for CPU enumeration (only when built with `ENABLE_OPENMP=1`).
+- if CPU backend is selected and no thread count is provided:
+  - OpenMP-enabled build: `OMP_NUM_THREADS` is used when valid; otherwise defaults to `1`.
+  - OpenMP-disabled build: always runs serially with `1` thread.
+- in OpenMP-disabled builds, explicit CPU thread arguments (`--cpu-threads <N>` or `cpu <N>`) fail with a hard error and instruct to rebuild with `ENABLE_OPENMP=1`.
 
 GPU options:
 - `--kernel <K>`: select kernel version (`1`, `2`, or `3`).

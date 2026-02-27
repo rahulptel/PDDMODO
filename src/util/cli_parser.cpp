@@ -3,6 +3,7 @@
 // --------------------------------------------------
 
 #include "cli_parser.hpp"
+#include "omp_compat.hpp"
 
 #include <cerrno>
 #include <climits>
@@ -137,7 +138,12 @@ void print_usage()
     cout << "\t\t\tcpu [N]\n";
     cout << "\t\t\tgpu [K]\n";
     cout << "\t\tbackend omitted defaults to cpu\n";
+#if CUMODD_HAS_OPENMP
     cout << "\t\tcpu threads default to OMP_NUM_THREADS if valid, otherwise 1\n";
+#else
+    cout << "\t\tthis binary was built without OpenMP: CPU runs serially (1 thread)\n";
+    cout << "\t\t--cpu-threads and cpu [N] are unsupported; rebuild with ENABLE_OPENMP=1\n";
+#endif
 
     cout << "\n";
     cout << "\t\tkernel = 1: one block per node\n";
@@ -518,18 +524,33 @@ bool parse_cli_args(int argc, char *argv[], CliOptions *out, string *error)
             return false;
         }
     }
-    else if (opts.backend == BACKEND_CPU && !cpu_threads_set)
+    else if (opts.backend == BACKEND_CPU)
     {
-        const char *env_threads = getenv("OMP_NUM_THREADS");
-        int parsed_env_threads = 0;
-        if (env_threads != NULL && parse_positive_int(string(env_threads), &parsed_env_threads))
+#if CUMODD_HAS_OPENMP
+        if (!cpu_threads_set)
         {
-            opts.cpu_threads = parsed_env_threads;
+            const char *env_threads = getenv("OMP_NUM_THREADS");
+            int parsed_env_threads = 0;
+            if (env_threads != NULL && parse_positive_int(string(env_threads), &parsed_env_threads))
+            {
+                opts.cpu_threads = parsed_env_threads;
+            }
+            else
+            {
+                opts.cpu_threads = 1;
+            }
         }
-        else
+#else
+        if (cpu_threads_set)
         {
-            opts.cpu_threads = 1;
+            if (error != NULL)
+            {
+                *error = "Error - cpu thread options are unsupported in this build (OpenMP disabled). Rebuild with ENABLE_OPENMP=1.";
+            }
+            return false;
         }
+        opts.cpu_threads = 1;
+#endif
     }
 
     if (opts.backend == BACKEND_GPU && opts.method != 1 && opts.method != 3)

@@ -10,9 +10,7 @@
 #include "../cuda/coupled_cuda.hpp"
 #endif
 
-#ifdef _OPENMP
-#include <omp.h>
-#endif
+#include "../util/omp_compat.hpp"
 
 #ifdef USE_CUDA
 #pragma weak topdown_cuda_enumerate
@@ -21,19 +19,6 @@
 #endif
 
 typedef std::pair<int,int> intpair;
-
-inline int normalized_cpu_threads(const int cpu_threads) {
-    return std::max(1, cpu_threads);
-}
-
-inline bool use_parallel_cpu(const int cpu_threads) {
-#ifdef _OPENMP
-    return normalized_cpu_threads(cpu_threads) > 1;
-#else
-    (void)cpu_threads;
-    return false;
-#endif
-}
 
 inline ParetoFrontier* request_frontier(ParetoFrontierManager* mgmr, const bool parallel_mode) {
     return parallel_mode ? new ParetoFrontier : mgmr->request();
@@ -169,8 +154,8 @@ ParetoFrontier* BDDMultiObj::pareto_frontier_topdown(BDD* bdd, bool maximization
 	
 	// Initialize manager
 	ParetoFrontierManager* mgmr = new ParetoFrontierManager(bdd->get_width());
-    const int threads = normalized_cpu_threads(cpu_threads);
-    const bool parallel_mode = use_parallel_cpu(threads);
+    const int threads = cumodd_normalized_cpu_threads(cpu_threads);
+    const bool parallel_mode = cumodd_use_parallel_cpu(threads);
 
 	// root node
     ObjType zero_array[NOBJS];
@@ -185,9 +170,7 @@ ParetoFrontier* BDDMultiObj::pareto_frontier_topdown(BDD* bdd, bool maximization
             const WallClock::time_point expand_begin = perf_enabled ? WallClock::now() : WallClock::time_point();
 		
             const int layer_size = bdd->layers[l].size();
-#ifdef _OPENMP
-#pragma omp parallel for if(parallel_mode) num_threads(threads) schedule(dynamic)
-#endif
+            CUMODD_OMP_PARALLEL_FOR_DYNAMIC_IF(parallel_mode, threads)
             for (int i = 0; i < layer_size; ++i) {
                 Node* node = bdd->layers[l][i];
                 node->pareto_frontier = request_frontier(mgmr, parallel_mode);
@@ -227,9 +210,7 @@ ParetoFrontier* BDDMultiObj::pareto_frontier_topdown(BDD* bdd, bool maximization
                 const WallClock::time_point expand_begin = perf_enabled ? WallClock::now() : WallClock::time_point();
 		
             const int layer_size = bdd->layers[l].size();
-#ifdef _OPENMP
-#pragma omp parallel for if(parallel_mode) num_threads(threads) schedule(dynamic)
-#endif
+            CUMODD_OMP_PARALLEL_FOR_DYNAMIC_IF(parallel_mode, threads)
             for (int i = 0; i < layer_size; ++i) {
                 Node* node = bdd->layers[l][i];
                 node->pareto_frontier = request_frontier(mgmr, parallel_mode);
@@ -283,8 +264,8 @@ ParetoFrontier* BDDMultiObj::pareto_frontier_bottomup(BDD* bdd, bool maximizatio
 	(void)dominance_strategy;
 	reset_cpu_perf_stats(stats);
     const bool perf_enabled = cpu_perf_enabled(stats);
-    const int threads = normalized_cpu_threads(cpu_threads);
-    const bool parallel_mode = use_parallel_cpu(threads);
+    const int threads = cumodd_normalized_cpu_threads(cpu_threads);
+    const bool parallel_mode = cumodd_use_parallel_cpu(threads);
 
     // Create pareto frontier manager
 	ParetoFrontierManager* mgmr = new ParetoFrontierManager(bdd->get_width());
@@ -302,9 +283,7 @@ ParetoFrontier* BDDMultiObj::pareto_frontier_bottomup(BDD* bdd, bool maximizatio
             const WallClock::time_point expand_begin = perf_enabled ? WallClock::now() : WallClock::time_point();
 
             const int layer_size = bdd->layers[l].size();
-#ifdef _OPENMP
-#pragma omp parallel for if(parallel_mode) num_threads(threads) schedule(dynamic)
-#endif
+            CUMODD_OMP_PARALLEL_FOR_DYNAMIC_IF(parallel_mode, threads)
             for (int i = 0; i < layer_size; ++i) {
                 Node* node = bdd->layers[l][i];
                 node->pareto_frontier_bu = request_frontier(mgmr, parallel_mode);
@@ -333,9 +312,7 @@ ParetoFrontier* BDDMultiObj::pareto_frontier_bottomup(BDD* bdd, bool maximizatio
                 const WallClock::time_point expand_begin = perf_enabled ? WallClock::now() : WallClock::time_point();
 
             const int layer_size = bdd->layers[l].size();
-#ifdef _OPENMP
-#pragma omp parallel for if(parallel_mode) num_threads(threads) schedule(dynamic)
-#endif
+            CUMODD_OMP_PARALLEL_FOR_DYNAMIC_IF(parallel_mode, threads)
             for (int i = 0; i < layer_size; ++i) {
                 Node* node = bdd->layers[l][i];
                 node->pareto_frontier_bu = request_frontier(mgmr, parallel_mode);
@@ -373,13 +350,11 @@ ParetoFrontier* BDDMultiObj::pareto_frontier_bottomup(BDD* bdd, bool maximizatio
 // Expand pareto frontier / topdown version
 //
 inline void expand_layer_topdown(BDD* bdd, const int l, const bool maximization, ParetoFrontierManager* mgmr, const int cpu_threads) {
-    const int threads = normalized_cpu_threads(cpu_threads);
-    const bool parallel_mode = use_parallel_cpu(threads);
+    const int threads = cumodd_normalized_cpu_threads(cpu_threads);
+    const bool parallel_mode = cumodd_use_parallel_cpu(threads);
 	if (maximization) {
         const int layer_size = bdd->layers[l].size();
-#ifdef _OPENMP
-#pragma omp parallel for if(parallel_mode) num_threads(threads) schedule(dynamic)
-#endif
+            CUMODD_OMP_PARALLEL_FOR_DYNAMIC_IF(parallel_mode, threads)
 		for (int i = 0; i < layer_size; ++i) {
             Node* node = bdd->layers[l][i];
 			// Request frontier
@@ -397,9 +372,7 @@ inline void expand_layer_topdown(BDD* bdd, const int l, const bool maximization,
 		}
 	} else {
         const int layer_size = bdd->layers[l].size();
-#ifdef _OPENMP
-#pragma omp parallel for if(parallel_mode) num_threads(threads) schedule(dynamic)
-#endif
+            CUMODD_OMP_PARALLEL_FOR_DYNAMIC_IF(parallel_mode, threads)
 		for (int i = 0; i < layer_size; ++i) {
             Node* node = bdd->layers[l][i];
 			// Request frontier
@@ -431,13 +404,11 @@ inline void expand_layer_topdown(BDD* bdd, const int l, const bool maximization,
 // Expand pareto frontier / bottomup version
 //
 inline void expand_layer_bottomup(BDD* bdd, const int l, const bool maximization, ParetoFrontierManager* mgmr, const int cpu_threads) {
-    const int threads = normalized_cpu_threads(cpu_threads);
-    const bool parallel_mode = use_parallel_cpu(threads);
+    const int threads = cumodd_normalized_cpu_threads(cpu_threads);
+    const bool parallel_mode = cumodd_use_parallel_cpu(threads);
 	if (maximization) {
         const int layer_size = bdd->layers[l].size();
-#ifdef _OPENMP
-#pragma omp parallel for if(parallel_mode) num_threads(threads) schedule(dynamic)
-#endif
+            CUMODD_OMP_PARALLEL_FOR_DYNAMIC_IF(parallel_mode, threads)
 		for (int i = 0; i < layer_size; ++i) {
             Node* node = bdd->layers[l][i];
 
@@ -456,9 +427,7 @@ inline void expand_layer_bottomup(BDD* bdd, const int l, const bool maximization
 		}
 	} else {
         const int layer_size = bdd->layers[l].size();
-#ifdef _OPENMP
-#pragma omp parallel for if(parallel_mode) num_threads(threads) schedule(dynamic)
-#endif
+            CUMODD_OMP_PARALLEL_FOR_DYNAMIC_IF(parallel_mode, threads)
 		for (int i = 0; i < layer_size; ++i) {
             Node* node = bdd->layers[l][i];
 
@@ -487,12 +456,10 @@ inline void expand_layer_bottomup(BDD* bdd, const int l, const bool maximization
 // Expand pareto frontier / topdown version
 //
 inline void expand_layer_topdown(MDD* mdd, const int l, ParetoFrontierManager* mgmr, const int cpu_threads) {
-    const int threads = normalized_cpu_threads(cpu_threads);
-    const bool parallel_mode = use_parallel_cpu(threads);
+    const int threads = cumodd_normalized_cpu_threads(cpu_threads);
+    const bool parallel_mode = cumodd_use_parallel_cpu(threads);
     const int layer_size = mdd->layers[l].size();
-#ifdef _OPENMP
-#pragma omp parallel for if(parallel_mode) num_threads(threads) schedule(dynamic)
-#endif
+            CUMODD_OMP_PARALLEL_FOR_DYNAMIC_IF(parallel_mode, threads)
 	for (int i = 0; i < layer_size; ++i) {
         MDDNode* node = mdd->layers[l][i];
 		// Request frontier
@@ -516,12 +483,10 @@ inline void expand_layer_topdown(MDD* mdd, const int l, ParetoFrontierManager* m
 // Expand pareto frontier / topdown version
 //
 inline void expand_layer_bottomup(MDD* mdd, const int l, ParetoFrontierManager* mgmr, const int cpu_threads) {
-    const int threads = normalized_cpu_threads(cpu_threads);
-    const bool parallel_mode = use_parallel_cpu(threads);
+    const int threads = cumodd_normalized_cpu_threads(cpu_threads);
+    const bool parallel_mode = cumodd_use_parallel_cpu(threads);
     const int layer_size = mdd->layers[l].size();
-#ifdef _OPENMP
-#pragma omp parallel for if(parallel_mode) num_threads(threads) schedule(dynamic)
-#endif
+            CUMODD_OMP_PARALLEL_FOR_DYNAMIC_IF(parallel_mode, threads)
 	for (int i = 0; i < layer_size; ++i) {
         MDDNode* node = mdd->layers[l][i];
 		// Request frontier
@@ -618,8 +583,8 @@ struct CompareMDDNode {
 ParetoFrontier* BDDMultiObj::pareto_frontier_dynamic_layer_cutset(BDD* bdd, bool maximization, const int problem_type, const int dominance_strategy, MultiObjectiveStats* stats, int cpu_threads) {
 	// Create pareto frontier manager
 	ParetoFrontierManager* mgmr = new ParetoFrontierManager(bdd->get_width());
-    const int threads = normalized_cpu_threads(cpu_threads);
-    const bool parallel_mode = use_parallel_cpu(threads);
+    const int threads = cumodd_normalized_cpu_threads(cpu_threads);
+    const bool parallel_mode = cumodd_use_parallel_cpu(threads);
     reset_cpu_perf_stats(stats);
     const bool perf_enabled = cpu_perf_enabled(stats);
 
@@ -661,9 +626,7 @@ ParetoFrontier* BDDMultiObj::pareto_frontier_dynamic_layer_cutset(BDD* bdd, bool
 			val_topdown = 0;
             const int layer_size = bdd->layers[layer_topdown].size();
             const WallClock::time_point recompute_begin = perf_enabled ? WallClock::now() : WallClock::time_point();
-#ifdef _OPENMP
-#pragma omp parallel for if(parallel_mode) num_threads(threads) reduction(+:val_topdown)
-#endif
+            CUMODD_OMP_PARALLEL_FOR_REDUCTION_SUM_IF(parallel_mode, threads, val_topdown)
 			for (int i = 0; i < layer_size; ++i) {
 				val_topdown += topdown_layer_value(bdd, bdd->layers[layer_topdown][i]);
 			}
@@ -693,9 +656,7 @@ ParetoFrontier* BDDMultiObj::pareto_frontier_dynamic_layer_cutset(BDD* bdd, bool
 			val_bottomup = 0;
             const int layer_size = bdd->layers[layer_bottomup].size();
             const WallClock::time_point recompute_begin = perf_enabled ? WallClock::now() : WallClock::time_point();
-#ifdef _OPENMP
-#pragma omp parallel for if(parallel_mode) num_threads(threads) reduction(+:val_bottomup)
-#endif
+            CUMODD_OMP_PARALLEL_FOR_REDUCTION_SUM_IF(parallel_mode, threads, val_bottomup)
 			for (int i = 0; i < layer_size; ++i) {
 				val_bottomup += bottomup_layer_value(bdd, bdd->layers[layer_bottomup][i]);
 			}
@@ -744,15 +705,14 @@ ParetoFrontier* BDDMultiObj::pareto_frontier_dynamic_layer_cutset(BDD* bdd, bool
 	paretoFrontier->sols.reserve( expected_size * NOBJS );
 
     if (parallel_mode && cutset.size() > 1) {
-#ifdef _OPENMP
         const WallClock::time_point convolution_begin = perf_enabled ? WallClock::now() : WallClock::time_point();
         vector<ParetoFrontier*> partial(threads, NULL);
-#pragma omp parallel num_threads(threads)
+        CUMODD_OMP_PARALLEL_NUM_THREADS(threads)
         {
-            const int tid = omp_get_thread_num();
+            const int tid = cumodd_omp_thread_num();
             ParetoFrontier* local_frontier = new ParetoFrontier;
             partial[tid] = local_frontier;
-#pragma omp for schedule(dynamic)
+            CUMODD_OMP_FOR_DYNAMIC
             for (int i = 0; i < cutset.size(); ++i) {
                 Node* node = cutset[i];
                 assert( node->pareto_frontier != NULL );
@@ -773,18 +733,6 @@ ParetoFrontier* BDDMultiObj::pareto_frontier_dynamic_layer_cutset(BDD* bdd, bool
         if (perf_enabled) {
             stats->cpu_cutset_partial_merge_wall_s += wall_elapsed_s(partial_merge_begin);
         }
-#else
-        const WallClock::time_point convolution_begin = perf_enabled ? WallClock::now() : WallClock::time_point();
-        for (int i = 0; i < cutset.size(); ++i) {
-            Node* node = cutset[i];
-            assert( node->pareto_frontier != NULL );
-            assert( node->pareto_frontier_bu != NULL );
-            paretoFrontier->convolute( *(node->pareto_frontier), *(node->pareto_frontier_bu) );
-        }
-        if (perf_enabled) {
-            stats->cpu_cutset_convolution_wall_s += wall_elapsed_s(convolution_begin);
-        }
-#endif
     } else {
         const WallClock::time_point convolution_begin = perf_enabled ? WallClock::now() : WallClock::time_point();
         for (int i = 0; i < cutset.size(); ++i) {
@@ -1191,8 +1139,8 @@ ParetoFrontier* BDDMultiObj::pareto_frontier_topdown(MDD* mdd, MultiObjectiveSta
 	stats->pareto_dominance_filtered = 0;
     reset_cpu_perf_stats(stats);
     const bool perf_enabled = cpu_perf_enabled(stats);
-    const int threads = normalized_cpu_threads(cpu_threads);
-    const bool parallel_mode = use_parallel_cpu(threads);
+    const int threads = cumodd_normalized_cpu_threads(cpu_threads);
+    const bool parallel_mode = cumodd_use_parallel_cpu(threads);
 	
 	// Initialize manager
 	ParetoFrontierManager* mgmr = new ParetoFrontierManager(mdd->get_width());
@@ -1208,9 +1156,7 @@ ParetoFrontier* BDDMultiObj::pareto_frontier_topdown(MDD* mdd, MultiObjectiveSta
 		cout << "Layer " << l << endl;
         const WallClock::time_point expand_begin = perf_enabled ? WallClock::now() : WallClock::time_point();
         const int layer_size = mdd->layers[l].size();
-#ifdef _OPENMP
-#pragma omp parallel for if(parallel_mode) num_threads(threads) schedule(dynamic)
-#endif
+            CUMODD_OMP_PARALLEL_FOR_DYNAMIC_IF(parallel_mode, threads)
 		for (int i = 0; i < layer_size; ++i) {
             MDDNode* node = mdd->layers[l][i];
 			node->pareto_frontier = request_frontier(mgmr, parallel_mode);
@@ -1280,8 +1226,8 @@ ParetoFrontier* BDDMultiObj::pareto_frontier_dynamic_layer_cutset_cuda(MDD* mdd,
 ParetoFrontier* BDDMultiObj::pareto_frontier_dynamic_layer_cutset(MDD* mdd, MultiObjectiveStats* stats, int cpu_threads) {
 	// Create pareto frontier manager
 	ParetoFrontierManager* mgmr = new ParetoFrontierManager(mdd->get_width());
-    const int threads = normalized_cpu_threads(cpu_threads);
-    const bool parallel_mode = use_parallel_cpu(threads);
+    const int threads = cumodd_normalized_cpu_threads(cpu_threads);
+    const bool parallel_mode = cumodd_use_parallel_cpu(threads);
     reset_cpu_perf_stats(stats);
     const bool perf_enabled = cpu_perf_enabled(stats);
 
@@ -1322,9 +1268,7 @@ ParetoFrontier* BDDMultiObj::pareto_frontier_dynamic_layer_cutset(MDD* mdd, Mult
 			val_topdown = 0;
             const int layer_size = mdd->layers[layer_topdown].size();
             const WallClock::time_point recompute_begin = perf_enabled ? WallClock::now() : WallClock::time_point();
-#ifdef _OPENMP
-#pragma omp parallel for if(parallel_mode) num_threads(threads) reduction(+:val_topdown)
-#endif
+            CUMODD_OMP_PARALLEL_FOR_REDUCTION_SUM_IF(parallel_mode, threads, val_topdown)
 			for (int i = 0; i < layer_size; ++i) {
 				val_topdown += topdown_layer_value(mdd, mdd->layers[layer_topdown][i]);
 			}
@@ -1344,9 +1288,7 @@ ParetoFrontier* BDDMultiObj::pareto_frontier_dynamic_layer_cutset(MDD* mdd, Mult
 			val_bottomup = 0;
             const int layer_size = mdd->layers[layer_bottomup].size();
             const WallClock::time_point recompute_begin = perf_enabled ? WallClock::now() : WallClock::time_point();
-#ifdef _OPENMP
-#pragma omp parallel for if(parallel_mode) num_threads(threads) reduction(+:val_bottomup)
-#endif
+            CUMODD_OMP_PARALLEL_FOR_REDUCTION_SUM_IF(parallel_mode, threads, val_bottomup)
 			for (int i = 0; i < layer_size; ++i) {
 				val_bottomup += bottomup_layer_value(mdd, mdd->layers[layer_bottomup][i]);
 			}
@@ -1381,15 +1323,14 @@ ParetoFrontier* BDDMultiObj::pareto_frontier_dynamic_layer_cutset(MDD* mdd, Mult
 	paretoFrontier->sols.reserve( expected_size * NOBJS );
 
     if (parallel_mode && cutset.size() > 1) {
-#ifdef _OPENMP
         const WallClock::time_point convolution_begin = perf_enabled ? WallClock::now() : WallClock::time_point();
         vector<ParetoFrontier*> partial(threads, NULL);
-#pragma omp parallel num_threads(threads)
+        CUMODD_OMP_PARALLEL_NUM_THREADS(threads)
         {
-            const int tid = omp_get_thread_num();
+            const int tid = cumodd_omp_thread_num();
             ParetoFrontier* local_frontier = new ParetoFrontier;
             partial[tid] = local_frontier;
-#pragma omp for schedule(dynamic)
+            CUMODD_OMP_FOR_DYNAMIC
             for (int i = 0; i < cutset.size(); ++i) {
                 MDDNode* node = cutset[i];
                 assert( node->pareto_frontier != NULL );
@@ -1410,18 +1351,6 @@ ParetoFrontier* BDDMultiObj::pareto_frontier_dynamic_layer_cutset(MDD* mdd, Mult
         if (perf_enabled) {
             stats->cpu_cutset_partial_merge_wall_s += wall_elapsed_s(partial_merge_begin);
         }
-#else
-        const WallClock::time_point convolution_begin = perf_enabled ? WallClock::now() : WallClock::time_point();
-        for (int i = 0; i < cutset.size(); ++i) {
-            MDDNode* node = cutset[i];
-            assert( node->pareto_frontier != NULL );
-            assert( node->pareto_frontier_bu != NULL );
-            paretoFrontier->convolute( *(node->pareto_frontier), *(node->pareto_frontier_bu) );
-        }
-        if (perf_enabled) {
-            stats->cpu_cutset_convolution_wall_s += wall_elapsed_s(convolution_begin);
-        }
-#endif
     } else {
         const WallClock::time_point convolution_begin = perf_enabled ? WallClock::now() : WallClock::time_point();
         for (int i = 0; i < cutset.size(); ++i) {
