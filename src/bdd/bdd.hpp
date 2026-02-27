@@ -43,11 +43,6 @@ struct Node {
     // State info for set covering: the set of constraints we have to cover
     boost::dynamic_bitset<> setcover_state;
 
-    // S-approximation 
-    ParetoFrontier* pareto_frontier_S;
-    // T-approximation 
-    ParetoFrontier* pareto_frontier_T;
-
 	// Constructor
 	Node(const int _layer, int _index);
 

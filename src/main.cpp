@@ -330,8 +330,6 @@ static bool write_stats_jsonl(const string &out_path,
     write_int("problem_type", opts.problem_type);
     write_bool("preprocess", opts.preprocess);
     write_int("method", opts.method);
-    write_int("approx_s", opts.approx_s);
-    write_int("approx_t", opts.approx_t);
     write_int("dominance", opts.dominance);
     write_string("backend", backend_to_string(opts.backend));
     write_int("cpu_threads", opts.cpu_threads);
@@ -407,8 +405,6 @@ int main(int argc, char *argv[])
     const bool preprocess = options.preprocess;
     const int method = options.method;
     bool maximization = true;
-    const int approx_S = options.approx_s;
-    const int approx_T = options.approx_t;
     const int dominance = options.dominance;
     const Backend backend = options.backend;
     const int kernel_version = options.kernel_version;
@@ -428,7 +424,6 @@ int main(int argc, char *argv[])
     Stats timers;
     int bdd_compilation_time = timers.register_name("BDD compilation time");
     int pareto_time = timers.register_name("BDD pareto time");
-    int approx_time = timers.register_name("BDD approximation time");
     long int original_width;
     long int reduced_width;
     long int original_num_nodes;
@@ -473,16 +468,6 @@ int main(int argc, char *argv[])
 
         // Update node weights
         bddCons.update_node_weights(bdd);
-
-        // Compute approximation
-        if (approx_S != 0)
-        {
-            timers.start_timer(approx_time);
-            // BDDMultiObj::approximate_pareto_frontier_bottomup(bdd, approx_S, approx_T);
-            // BDDMultiObj::approximate_pareto_frontier_topdown(bdd, approx_S, approx_T);
-            // BDDMultiObj::approximate_pareto_frontier_topdown_dominance(bdd, approx_S, approx_T);
-            timers.end_timer(approx_time);
-        }
 
         // Reduce BDD
         BDDAlg::reduce(bdd);
@@ -789,15 +774,11 @@ int main(int argc, char *argv[])
         }
     }
 
-    double total_time = (timers.get_time(bdd_compilation_time) + timers.get_time(approx_time) + timers.get_time(pareto_time));
-    (void)total_time;
-
     // cout << "\nPareto frontier: " << endl;
     // cout << "\tNumber of solutions: " << pareto_frontier->get_num_sols() << endl;
     // cout << "\n\tBDD time: " << timers.get_time(bdd_compilation_time) << endl;
-    // cout << "\tApproximation filtering time: " << timers.get_time(approx_time) << endl;
     // cout << "\tPareto time: " << timers.get_time(pareto_time) << endl;
-    // cout << "\tTotal time: " << total_time << endl;
+    // cout << "\tTotal time: " << (timers.get_time(bdd_compilation_time) + timers.get_time(pareto_time)) << endl;
     // cout << endl;
 
     // cout << "\n\nPareto frontier: " << endl;
@@ -811,8 +792,6 @@ int main(int argc, char *argv[])
     // stats << "\t" << NOBJS;
     // stats << "\t" << preprocess;
     // stats << "\t" << method;
-    // stats << "\t" << approx_S;
-    // stats << "\t" << approx_T;
     // stats << "\t" << pareto_frontier->get_num_sols();
     // stats << "\t" << original_width;
     // stats << "\t" << original_num_nodes;

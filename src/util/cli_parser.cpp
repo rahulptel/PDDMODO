@@ -15,8 +15,6 @@ CliOptions::CliOptions()
     : problem_type(0),
       preprocess(false),
       method(0),
-      approx_s(0),
-      approx_t(0),
       dominance(0),
       backend(BACKEND_CPU),
       cpu_threads(1),
@@ -107,7 +105,7 @@ const char *backend_to_string(const Backend backend)
 void print_usage()
 {
     cout << '\n';
-    cout << "Usage: multiobj_nobjs<NUM_OBJS> [input file] [problem type] [preprocess?] [method] [appr-S] [appr-T] [dominance] [options]\n";
+    cout << "Usage: multiobj_nobjs<NUM_OBJS> [input file] [problem type] [preprocess?] [method] [dominance] [options]\n";
 
     cout << "\n\twhere:";
 
@@ -125,9 +123,6 @@ void print_usage()
     cout << "\t\tmethod = 1: top-down BFS\n";
     cout << "\t\tmethod = 2: bottom-up BFS\n";
     cout << "\t\tmethod = 3: dynamic layer cutset\n";
-
-    cout << "\n";
-    cout << "\t\tapprox = n m: approximate n-sized S set and m-sized T set (n=0 if disabled)\n";
 
     cout << "\n";
     cout << "\t\tdominance = 0:  disable state dominance\n";
@@ -176,7 +171,7 @@ bool parse_cli_args(int argc, char *argv[], CliOptions *out, string *error)
         return false;
     }
 
-    if (argc < 8)
+    if (argc < 6)
     {
         if (error != NULL)
         {
@@ -190,9 +185,7 @@ bool parse_cli_args(int argc, char *argv[], CliOptions *out, string *error)
     opts.problem_type = atoi(argv[2]);
     opts.preprocess = (argv[3][0] == '1');
     opts.method = atoi(argv[4]);
-    opts.approx_s = atoi(argv[5]);
-    opts.approx_t = atoi(argv[6]);
-    opts.dominance = atoi(argv[7]);
+    opts.dominance = atoi(argv[5]);
 
     bool backend_set = false;
     bool backend_from_named = false;
@@ -200,7 +193,7 @@ bool parse_cli_args(int argc, char *argv[], CliOptions *out, string *error)
     bool kernel_version_set = false;
     bool cpu_threads_set = false;
 
-    for (int i = 8; i < argc; ++i)
+    for (int i = 6; i < argc; ++i)
     {
         string token(argv[i]);
         if (token == "--backend")

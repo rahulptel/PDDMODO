@@ -31,7 +31,7 @@ Executable name:
 CLI:
 
 ```bash
-./multiobj_nobjs3 <input-file> <problem-type> <preprocess> <method> <appr-S> <appr-T> <dominance> [options]
+./multiobj_nobjs3 <input-file> <problem-type> <preprocess> <method> <dominance> [options]
 ```
 
 Backend selection (optional; defaults to CPU):

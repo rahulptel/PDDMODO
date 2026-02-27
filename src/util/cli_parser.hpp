@@ -19,8 +19,6 @@ struct CliOptions
     int problem_type;
     bool preprocess;
     int method;
-    int approx_s;
-    int approx_t;
     int dominance;
     Backend backend;
     int cpu_threads;
