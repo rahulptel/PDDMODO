@@ -25,7 +25,7 @@ Executable name:
 CLI:
 
 ```bash
-./multiobj_nobjs3 <input-file> <problem-type> <preprocess> <method> <appr-S> <appr-T> <dominance> [backend] [kernel-version]
+./multiobj_nobjs3 <input-file> <problem-type> <preprocess> <method> <appr-S> <appr-T> <dominance> [backend] [kernel-version] [--save-frontier] [--frontier-out <path>]
 ```
 
 `backend` is optional and can be:
@@ -42,6 +42,12 @@ If `backend=cuda` and `kernel-version` is omitted, defaults are:
 - set packing (`problem-type=2`) -> `2`
 - set covering (`problem-type=3`) -> `1`
 - tsp (`problem-type=4`) -> `3`
+
+Frontier saving options:
+- `--save-frontier`: save frontier as gzip-compressed CSV to `<input_stem>.frontier.csv.gz` in the current working directory.
+- `--frontier-out <path>`: save frontier as gzip-compressed CSV to the explicit path provided.
+- If both are passed, `--frontier-out <path>` is used.
+- Optional arguments can be provided in any order.
 
 When `backend=cuda`, execution fails fast with a nonzero exit code if CUDA is unavailable or if the selected problem/method combination has no CUDA implementation.
 

@@ -6,6 +6,7 @@
 #include <iostream>
 #include <cstdlib>
 #include <string>
+#include <cstdio>
 
 #include "bdd/bdd.hpp"
 #include "bdd/bdd_alg.hpp"
@@ -33,6 +34,137 @@
 
 using namespace std;
 
+static string shell_single_quote(const string &value)
+{
+    string quoted = "'";
+    for (char c : value)
+    {
+        if (c == '\'')
+        {
+            quoted += "'\"'\"'";
+        }
+        else
+        {
+            quoted += c;
+        }
+    }
+    quoted += "'";
+    return quoted;
+}
+
+static string derive_default_frontier_path(const string &input_path)
+{
+    string base = input_path;
+    size_t slash_pos = base.find_last_of("/\\");
+    if (slash_pos != string::npos)
+    {
+        base = base.substr(slash_pos + 1);
+    }
+
+    size_t dot_pos = base.find_last_of('.');
+    if (dot_pos != string::npos)
+    {
+        base = base.substr(0, dot_pos);
+    }
+
+    if (base.empty())
+    {
+        base = "frontier";
+    }
+
+    return base + ".frontier.csv.gz";
+}
+
+static bool write_frontier_gzip_csv(const ParetoFrontier *frontier, const int problem_type, const string &out_path, string *error)
+{
+    if (frontier == NULL)
+    {
+        if (error != NULL)
+        {
+            *error = "frontier is null";
+        }
+        return false;
+    }
+
+    if (out_path.empty())
+    {
+        if (error != NULL)
+        {
+            *error = "output path is empty";
+        }
+        return false;
+    }
+
+    if (frontier->sols.size() % NOBJS != 0)
+    {
+        if (error != NULL)
+        {
+            *error = "frontier has invalid dimension";
+        }
+        return false;
+    }
+
+    const string command = "gzip -c > " + shell_single_quote(out_path);
+    FILE *pipe = popen(command.c_str(), "w");
+    if (pipe == NULL)
+    {
+        if (error != NULL)
+        {
+            *error = "could not launch gzip";
+        }
+        return false;
+    }
+
+    bool ok = true;
+    for (size_t i = 0; i < frontier->sols.size() && ok; i += NOBJS)
+    {
+        for (int o = 0; o < NOBJS; ++o)
+        {
+            ObjType value = frontier->sols[i + o];
+            if (problem_type == 3)
+            {
+                value = -value;
+            }
+
+            if (o > 0 && fputc(',', pipe) == EOF)
+            {
+                ok = false;
+                break;
+            }
+            if (fprintf(pipe, "%d", value) < 0)
+            {
+                ok = false;
+                break;
+            }
+        }
+        if (ok && fputc('\n', pipe) == EOF)
+        {
+            ok = false;
+        }
+    }
+
+    int close_status = pclose(pipe);
+    if (!ok)
+    {
+        if (error != NULL)
+        {
+            *error = "failed while writing compressed frontier";
+        }
+        return false;
+    }
+
+    if (close_status != 0)
+    {
+        if (error != NULL)
+        {
+            *error = "gzip exited with non-zero status";
+        }
+        return false;
+    }
+
+    return true;
+}
+
 //
 // Main function
 //
@@ -47,7 +179,7 @@ int main(int argc, char *argv[])
     auto print_usage = []()
     {
         cout << '\n';
-        cout << "Usage: multiobj_nobjs<NUM_OBJS> [input file] [problem type] [preprocess?] [method] [appr-S] [appr-T] [dominance] [backend] [kernel_version]\n";
+        cout << "Usage: multiobj_nobjs<NUM_OBJS> [input file] [problem type] [preprocess?] [method] [appr-S] [appr-T] [dominance] [backend] [kernel_version] [--save-frontier] [--frontier-out <path>]\n";
 
         cout << "\n\twhere:";
 
@@ -88,10 +220,15 @@ int main(int argc, char *argv[])
         cout << "\t\t\tproblem_type=3 (set covering): 1\n";
         cout << "\t\t\tproblem_type=4 (TSP): 3\n";
 
+        cout << "\n";
+        cout << "\t\t--save-frontier: save Pareto frontier to <input_stem>.frontier.csv.gz\n";
+        cout << "\t\t--frontier-out <path>: save Pareto frontier to explicit gzip CSV path\n";
+        cout << "\t\toptional arguments can be provided in any order\n";
+
         cout << endl;
     };
 
-    if (argc != 8 && argc != 9 && argc != 10)
+    if (argc < 8)
     {
         print_usage();
         exit(1);
@@ -108,37 +245,67 @@ int main(int argc, char *argv[])
 
     Backend backend = BACKEND_CPU;
     int kernel_version = -1;
+    bool kernel_version_set = false;
 
-    if (argc >= 9)
+    bool save_frontier = false;
+    string frontier_out_path;
+
+    for (int i = 8; i < argc; ++i)
     {
-        string backend_arg(argv[8]);
-        if (backend_arg == "cpu")
+        string token(argv[i]);
+        if (token == "cpu")
         {
             backend = BACKEND_CPU;
         }
-        else if (backend_arg == "cuda")
+        else if (token == "cuda")
         {
             backend = BACKEND_CUDA;
         }
+        else if (token == "1" || token == "2" || token == "3")
+        {
+            if (kernel_version_set)
+            {
+                cout << "Error - kernel_version provided multiple times." << endl;
+                print_usage();
+                exit(1);
+            }
+            kernel_version = atoi(token.c_str());
+            kernel_version_set = true;
+        }
+        else if (token == "--save-frontier")
+        {
+            save_frontier = true;
+        }
+        else if (token == "--frontier-out")
+        {
+            if (i + 1 >= argc)
+            {
+                cout << "Error - --frontier-out requires a file path." << endl;
+                print_usage();
+                exit(1);
+            }
+            frontier_out_path = argv[++i];
+            if (frontier_out_path.empty())
+            {
+                cout << "Error - --frontier-out path cannot be empty." << endl;
+                exit(1);
+            }
+            save_frontier = true;
+        }
         else
         {
-            cout << "Error - backend must be 'cpu' or 'cuda' (received '" << backend_arg << "')." << endl;
+            cout << "Error - unrecognized optional argument '" << token << "'." << endl;
             print_usage();
             exit(1);
         }
     }
 
-    if (argc >= 10)
+    if (save_frontier && frontier_out_path.empty())
     {
-        kernel_version = atoi(argv[9]);
-        if (kernel_version != 1 && kernel_version != 2 && kernel_version != 3) {
-            cout << "Error - kernel_version must be 1, 2, or 3 (received " << kernel_version << ")." << endl;
-            print_usage();
-            exit(1);
-        }
+        frontier_out_path = derive_default_frontier_path(argv[1]);
     }
 
-    if (backend == BACKEND_CUDA && argc < 10)
+    if (backend == BACKEND_CUDA && !kernel_version_set)
     {
         if (problem_type == 1 || problem_type == 3)
         {
@@ -345,6 +512,21 @@ int main(int argc, char *argv[])
 
         assert(pareto_frontier != NULL);
 
+        if (save_frontier)
+        {
+            string save_error;
+            if (!write_frontier_gzip_csv(pareto_frontier, problem_type, frontier_out_path, &save_error))
+            {
+                cout << "Error - failed to save frontier to '" << frontier_out_path << "'";
+                if (!save_error.empty())
+                {
+                    cout << ": " << save_error;
+                }
+                cout << endl;
+                exit(1);
+            }
+        }
+
         frontier_tsp = clock() - frontier_tsp;
 
         cout << pareto_frontier->get_num_sols() << endl;
@@ -431,6 +613,21 @@ int main(int argc, char *argv[])
     {
         cout << "\nError - pareto frontier not computed" << endl;
         exit(1);
+    }
+
+    if (save_frontier)
+    {
+        string save_error;
+        if (!write_frontier_gzip_csv(pareto_frontier, problem_type, frontier_out_path, &save_error))
+        {
+            cout << "Error - failed to save frontier to '" << frontier_out_path << "'";
+            if (!save_error.empty())
+            {
+                cout << ": " << save_error;
+            }
+            cout << endl;
+            exit(1);
+        }
     }
 
     timers.end_timer(pareto_time);
