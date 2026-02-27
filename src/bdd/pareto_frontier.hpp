@@ -61,6 +61,9 @@ public:
     // Sort array in decreasing order
     void sort_decreasing();
 
+    // Sort array in lexicographic ascending order
+    void sort_lexicographic_ascending();
+
     // Check consistency
     bool check_consistency();
 
@@ -402,6 +405,20 @@ struct SolComp {
 	}
 };
 
+//
+// Auxiliary comparator (ascending)
+//
+struct SolCompAscending {
+	bool operator()(const ObjType* solA, const ObjType* solB) {
+		for (int i = 0; i < NOBJS; ++i) {
+			if (solA[i] != solB[i]) {
+				return (solA[i] < solB[i]);
+			}
+		}
+		return (solA[0] < solB[0]);
+	}
+};
+
 
 //
 // Sort array in decreasing order
@@ -416,6 +433,26 @@ inline void ParetoFrontier::sort_decreasing() {
         std::copy( sols.begin()+i, sols.begin()+i+NOBJS, elems[ct++] );
     }
     sort(elems.begin(), elems.begin()+num_sols, SolComp());
+    ct = 0;
+    for (int i = 0; i < num_sols; ++i) {
+        std::copy( elems[i], elems[i]+NOBJS, sols.begin()+ct );
+        ct += NOBJS;
+    }
+}
+
+//
+// Sort array in lexicographic ascending order
+//
+inline void ParetoFrontier::sort_lexicographic_ascending() {
+    const int num_sols = get_num_sols();
+    while (elems.size() < num_sols) {
+        elems.push_back( new ObjType[NOBJS] );
+    }
+    int ct = 0;
+    for (int i = 0; i < sols.size(); i += NOBJS) {
+        std::copy( sols.begin()+i, sols.begin()+i+NOBJS, elems[ct++] );
+    }
+    sort(elems.begin(), elems.begin()+num_sols, SolCompAscending());
     ct = 0;
     for (int i = 0; i < num_sols; ++i) {
         std::copy( elems[i], elems[i]+NOBJS, sols.begin()+ct );

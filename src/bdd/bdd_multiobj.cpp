@@ -4,14 +4,50 @@
 
 #include "bdd_multiobj.hpp"
 #include "bdd_alg.hpp"
+#ifdef USE_CUDA
 #include "../cuda/topdown_cuda.hpp"
 #include "../cuda/coupled_cuda.hpp"
+#endif
 
+#ifdef _OPENMP
+#include <omp.h>
+#endif
+
+#ifdef USE_CUDA
 #pragma weak topdown_cuda_enumerate
 #pragma weak topdown_mdd_cuda_enumerate
 #pragma weak coupled_cuda_enumerate
+#endif
 
 typedef std::pair<int,int> intpair;
+
+inline int normalized_cpu_threads(const int cpu_threads) {
+    return std::max(1, cpu_threads);
+}
+
+inline bool use_parallel_cpu(const int cpu_threads) {
+#ifdef _OPENMP
+    return normalized_cpu_threads(cpu_threads) > 1;
+#else
+    (void)cpu_threads;
+    return false;
+#endif
+}
+
+inline ParetoFrontier* request_frontier(ParetoFrontierManager* mgmr, const bool parallel_mode) {
+    return parallel_mode ? new ParetoFrontier : mgmr->request();
+}
+
+inline void recycle_frontier(ParetoFrontierManager* mgmr, ParetoFrontier* frontier, const bool parallel_mode) {
+    if (frontier == NULL) {
+        return;
+    }
+    if (parallel_mode) {
+        delete frontier;
+    } else {
+        mgmr->deallocate(frontier);
+    }
+}
 
 inline bool IntPairLargestToSmallestComp(intpair l, intpair r) {
     return l.second > r.second;     // from largest to smallest
@@ -32,6 +68,7 @@ ParetoFrontier* BDDMultiObj::pareto_frontier_topdown_cuda(BDD* bdd, bool maximiz
         stats->layer_coupling = 0;
     }
 
+#ifdef USE_CUDA
     if (topdown_cuda_enumerate == NULL) {
         if (reason != NULL) {
             *reason = "CUDA top-down enumeration symbol is unavailable in this binary";
@@ -46,6 +83,17 @@ ParetoFrontier* BDDMultiObj::pareto_frontier_topdown_cuda(BDD* bdd, bool maximiz
         *reason = "CUDA top-down enumeration failed";
     }
     return frontier;
+#else
+    (void)bdd;
+    (void)maximization;
+    (void)problem_type;
+    (void)dominance_strategy;
+    (void)kernel_version;
+    if (reason != NULL) {
+        *reason = "GPU backend requested but binary was built without CUDA support";
+    }
+    return NULL;
+#endif
 }
 
 //
@@ -59,6 +107,7 @@ ParetoFrontier* BDDMultiObj::pareto_frontier_topdown_cuda(MDD* mdd, MultiObjecti
         stats->layer_coupling = 0;
     }
 
+#ifdef USE_CUDA
     std::string local_reason;
     std::string* active_reason = reason != NULL ? reason : &local_reason;
     ParetoFrontier* frontier = topdown_mdd_cuda_enumerate(mdd, stats, active_reason, kernel_version);
@@ -66,26 +115,36 @@ ParetoFrontier* BDDMultiObj::pareto_frontier_topdown_cuda(MDD* mdd, MultiObjecti
         *reason = "CUDA top-down enumeration failed for MDD";
     }
     return frontier;
+#else
+    (void)mdd;
+    (void)kernel_version;
+    if (reason != NULL) {
+        *reason = "GPU backend requested but binary was built without CUDA support";
+    }
+    return NULL;
+#endif
 }
 
 //
 // Find pareto frontier using top-down approach
 //
-ParetoFrontier* BDDMultiObj::pareto_frontier_topdown(BDD* bdd, bool maximization, const int problem_type, int dominance_strategy, MultiObjectiveStats* stats) {
+ParetoFrontier* BDDMultiObj::pareto_frontier_topdown(BDD* bdd, bool maximization, const int problem_type, int dominance_strategy, MultiObjectiveStats* stats, int cpu_threads) {
     //cout << "\nComputing Pareto Frontier..." << endl;
 
 	// Initialize stats
 	stats->pareto_dominance_time = 0;
 	stats->pareto_dominance_filtered = 0;
-    clock_t time_filter = 0, init;
+    clock_t init;
 	
 	// Initialize manager
 	ParetoFrontierManager* mgmr = new ParetoFrontierManager(bdd->get_width());
+    const int threads = normalized_cpu_threads(cpu_threads);
+    const bool parallel_mode = use_parallel_cpu(threads);
 
 	// root node
     ObjType zero_array[NOBJS];
 	memset(zero_array, 0, sizeof(ObjType)*NOBJS);
-	bdd->get_root()->pareto_frontier = mgmr->request();
+	bdd->get_root()->pareto_frontier = request_frontier(mgmr, parallel_mode);
 	bdd->get_root()->pareto_frontier->add(zero_array);
 
     
@@ -93,27 +152,22 @@ ParetoFrontier* BDDMultiObj::pareto_frontier_topdown(BDD* bdd, bool maximization
 		for (int l = 1; l < bdd->num_layers; ++l) {
 //			cout << "\tLayer " << l << " - size = " << bdd->layers[l].size() << '\n';
 		
-			// iterate on layers
-			for (vector<Node*>::iterator it = bdd->layers[l].begin(); it != bdd->layers[l].end(); ++it) {
-
-				Node* node = (*it);		
-				int id = node->index;
-
-				// Request frontier
-				node->pareto_frontier = mgmr->request();
-
-				// add incoming one arcs
-				for (vector<Node*>::iterator prev = (*it)->prev[1].begin();
-						prev != (*it)->prev[1].end(); ++prev) {
-					node->pareto_frontier->merge(*((*prev)->pareto_frontier), (*prev)->weights[1]);                     
-				}
-				
-				// add incoming zero arcs
-				for (vector<Node*>::iterator prev = (*it)->prev[0].begin();
-						prev != (*it)->prev[0].end(); ++prev) {
-					node->pareto_frontier->merge(*((*prev)->pareto_frontier), (*prev)->weights[0]);
-				}
-			}
+            const int layer_size = bdd->layers[l].size();
+#ifdef _OPENMP
+#pragma omp parallel for if(parallel_mode) num_threads(threads) schedule(dynamic)
+#endif
+            for (int i = 0; i < layer_size; ++i) {
+                Node* node = bdd->layers[l][i];
+                node->pareto_frontier = request_frontier(mgmr, parallel_mode);
+                for (vector<Node*>::iterator prev = node->prev[1].begin();
+                        prev != node->prev[1].end(); ++prev) {
+                    node->pareto_frontier->merge(*((*prev)->pareto_frontier), (*prev)->weights[1]);
+                }
+                for (vector<Node*>::iterator prev = node->prev[0].begin();
+                        prev != node->prev[0].end(); ++prev) {
+                    node->pareto_frontier->merge(*((*prev)->pareto_frontier), (*prev)->weights[0]);
+                }
+            }
 
 			if (dominance_strategy > 0) {
                 init = clock();
@@ -123,34 +177,29 @@ ParetoFrontier* BDDMultiObj::pareto_frontier_topdown(BDD* bdd, bool maximization
 				
 			// Deallocate frontier from previous layer
 			for (vector<Node*>::iterator it = bdd->layers[l-1].begin(); it != bdd->layers[l-1].end(); ++it) {
-				mgmr->deallocate( (*it)->pareto_frontier );
+				recycle_frontier(mgmr, (*it)->pareto_frontier, parallel_mode);
 			}
 		}
 	} else {
 		for (int l = 1; l < bdd->num_layers; ++l) {
 			//cout << "\tLayer " << l << " - size = " << bdd->layers[l].size() << '\n';
 		
-			// iterate on layers
-			for (vector<Node*>::iterator it = bdd->layers[l].begin(); it != bdd->layers[l].end(); ++it) {
-
-				Node* node = (*it);		
-				int id = node->index;
-
-				// Request frontier
-				node->pareto_frontier = mgmr->request();
-				
-				// add incoming zero arcs
-				for (vector<Node*>::iterator prev = (*it)->prev[0].begin();
-						prev != (*it)->prev[0].end(); ++prev) {
-					node->pareto_frontier->merge(*((*prev)->pareto_frontier), (*prev)->weights[0]);
-				}
-
-				// add incoming one arcs
-				for (vector<Node*>::iterator prev = (*it)->prev[1].begin();
-						prev != (*it)->prev[1].end(); ++prev) {
-					node->pareto_frontier->merge(*((*prev)->pareto_frontier), (*prev)->weights[1]);
-				}
-			}
+            const int layer_size = bdd->layers[l].size();
+#ifdef _OPENMP
+#pragma omp parallel for if(parallel_mode) num_threads(threads) schedule(dynamic)
+#endif
+            for (int i = 0; i < layer_size; ++i) {
+                Node* node = bdd->layers[l][i];
+                node->pareto_frontier = request_frontier(mgmr, parallel_mode);
+                for (vector<Node*>::iterator prev = node->prev[0].begin();
+                        prev != node->prev[0].end(); ++prev) {
+                    node->pareto_frontier->merge(*((*prev)->pareto_frontier), (*prev)->weights[0]);
+                }
+                for (vector<Node*>::iterator prev = node->prev[1].begin();
+                        prev != node->prev[1].end(); ++prev) {
+                    node->pareto_frontier->merge(*((*prev)->pareto_frontier), (*prev)->weights[1]);
+                }
+            }
 
 			if (dominance_strategy > 0) {				
                 init = clock();				
@@ -160,16 +209,17 @@ ParetoFrontier* BDDMultiObj::pareto_frontier_topdown(BDD* bdd, bool maximization
 
 			// Deallocate frontier from previous layer
 			for (vector<Node*>::iterator it = bdd->layers[l-1].begin(); it != bdd->layers[l-1].end(); ++it) {
-				mgmr->deallocate( (*it)->pareto_frontier );
+				recycle_frontier(mgmr, (*it)->pareto_frontier, parallel_mode);
 			}
 		}		
 	}
-
-    //cout << "Filtering time: " << (double)time_filter/CLOCKS_PER_SEC << endl;
+    
+    ParetoFrontier* frontier = bdd->get_terminal()->pareto_frontier;
+    frontier->sort_lexicographic_ascending();
     
     // Erase memory
 	delete mgmr;
-	return bdd->get_terminal()->pareto_frontier;
+	return frontier;
 }
 
 
@@ -177,96 +227,101 @@ ParetoFrontier* BDDMultiObj::pareto_frontier_topdown(BDD* bdd, bool maximization
 //
 // Find pareto frontier using bottom-up approach
 //
-ParetoFrontier* BDDMultiObj::pareto_frontier_bottomup(BDD* bdd, bool maximization, const int problem_type, const int dominance_strategy, MultiObjectiveStats* stats) {
+ParetoFrontier* BDDMultiObj::pareto_frontier_bottomup(BDD* bdd, bool maximization, const int problem_type, const int dominance_strategy, MultiObjectiveStats* stats, int cpu_threads) {
     //cout << "\nComputing Pareto Set...\n";
-	const int width = bdd->get_width();
+	(void)problem_type;
+	(void)dominance_strategy;
+	(void)stats;
+    const int threads = normalized_cpu_threads(cpu_threads);
+    const bool parallel_mode = use_parallel_cpu(threads);
 
-	// Create pareto frontier manager
+    // Create pareto frontier manager
 	ParetoFrontierManager* mgmr = new ParetoFrontierManager(bdd->get_width());
 
 	// root node
     ObjType zero_array[NOBJS];
 	memset(zero_array, 0, sizeof(ObjType)*NOBJS);
-	bdd->get_terminal()->pareto_frontier_bu = mgmr->request();
+	bdd->get_terminal()->pareto_frontier_bu = request_frontier(mgmr, parallel_mode);
 	bdd->get_terminal()->pareto_frontier_bu->add(zero_array);
 
 	if (maximization) {
 		for (int l = bdd->num_layers-2; l >= 0; --l) {
 			// cout << "\tLayer " << l << " - size = " << bdd->layers[l].size();
 			// cout << '\n';
-		
-			for (vector<Node*>::iterator it = bdd->layers[l].begin(); it != bdd->layers[l].end(); ++it) {
-				Node* node = (*it);		
-				int id = node->index;
 
-				// Request frontier
-				node->pareto_frontier_bu = mgmr->request();
-
-				// add outgoing one arc
-				if (node->arcs[1] != NULL) {
-					node->pareto_frontier_bu->merge(*(node->arcs[1]->pareto_frontier_bu), node->weights[1]);
-				}
-
-				// add outgoing zero arc
-				if (node->arcs[0] != NULL) {
-					node->pareto_frontier_bu->merge(*(node->arcs[0]->pareto_frontier_bu), node->weights[0]);
-				}
-			}
+            const int layer_size = bdd->layers[l].size();
+#ifdef _OPENMP
+#pragma omp parallel for if(parallel_mode) num_threads(threads) schedule(dynamic)
+#endif
+            for (int i = 0; i < layer_size; ++i) {
+                Node* node = bdd->layers[l][i];
+                node->pareto_frontier_bu = request_frontier(mgmr, parallel_mode);
+                if (node->arcs[1] != NULL) {
+                    node->pareto_frontier_bu->merge(*(node->arcs[1]->pareto_frontier_bu), node->weights[1]);
+                }
+                if (node->arcs[0] != NULL) {
+                    node->pareto_frontier_bu->merge(*(node->arcs[0]->pareto_frontier_bu), node->weights[0]);
+                }
+            }
 
 			// Deallocate frontier from previous layer
 			for (vector<Node*>::iterator it = bdd->layers[l+1].begin(); it != bdd->layers[l+1].end(); ++it) {
-				mgmr->deallocate( (*it)->pareto_frontier_bu );
+				recycle_frontier(mgmr, (*it)->pareto_frontier_bu, parallel_mode);
 			}
 		} 
 	} else {
 		for (int l = bdd->num_layers-2; l >= 0; --l) {
 			// cout << "\tLayer " << l << " - size = " << bdd->layers[l].size();
 			// cout << '\n';
-		
-			for (vector<Node*>::iterator it = bdd->layers[l].begin(); it != bdd->layers[l].end(); ++it) {
-				Node* node = (*it);		
-				int id = node->index;
 
-				// Request frontier
-				node->pareto_frontier_bu = mgmr->request();
-
-				// add outgoing zero arc
-				if (node->arcs[0] != NULL) {
-					node->pareto_frontier_bu->merge(*(node->arcs[0]->pareto_frontier_bu), node->weights[0]);
-				}
-
-				// add outgoing one arc
-				if (node->arcs[1] != NULL) {
-					//node->pareto_frontier_bu->merge(*(node->arcs[1]->pareto_frontier_bu), shift_one);
-					node->pareto_frontier_bu->merge(*(node->arcs[1]->pareto_frontier_bu), node->weights[1]);
-				}
-			}
+            const int layer_size = bdd->layers[l].size();
+#ifdef _OPENMP
+#pragma omp parallel for if(parallel_mode) num_threads(threads) schedule(dynamic)
+#endif
+            for (int i = 0; i < layer_size; ++i) {
+                Node* node = bdd->layers[l][i];
+                node->pareto_frontier_bu = request_frontier(mgmr, parallel_mode);
+                if (node->arcs[0] != NULL) {
+                    node->pareto_frontier_bu->merge(*(node->arcs[0]->pareto_frontier_bu), node->weights[0]);
+                }
+                if (node->arcs[1] != NULL) {
+                    node->pareto_frontier_bu->merge(*(node->arcs[1]->pareto_frontier_bu), node->weights[1]);
+                }
+            }
 
 			// Deallocate frontier from previous layer
 			for (vector<Node*>::iterator it = bdd->layers[l+1].begin(); it != bdd->layers[l+1].end(); ++it) {
-				mgmr->deallocate( (*it)->pareto_frontier_bu );
+				recycle_frontier(mgmr, (*it)->pareto_frontier_bu, parallel_mode);
 			}
 		} 
 	}
+
+    ParetoFrontier* frontier = bdd->get_root()->pareto_frontier_bu;
+    frontier->sort_lexicographic_ascending();
 
     // Erase memory
 	delete mgmr;
 
     // Return pareto frontier
-	return bdd->get_root()->pareto_frontier_bu;
+	return frontier;
 }
 
 
 //
 // Expand pareto frontier / topdown version
 //
-inline void expand_layer_topdown(BDD* bdd, const int l, const bool maximization, ParetoFrontierManager* mgmr) {
-	Node* node = NULL;
+inline void expand_layer_topdown(BDD* bdd, const int l, const bool maximization, ParetoFrontierManager* mgmr, const int cpu_threads) {
+    const int threads = normalized_cpu_threads(cpu_threads);
+    const bool parallel_mode = use_parallel_cpu(threads);
 	if (maximization) {
-		for (int i = 0; i < bdd->layers[l].size(); ++i) {
-			node = bdd->layers[l][i];
+        const int layer_size = bdd->layers[l].size();
+#ifdef _OPENMP
+#pragma omp parallel for if(parallel_mode) num_threads(threads) schedule(dynamic)
+#endif
+		for (int i = 0; i < layer_size; ++i) {
+            Node* node = bdd->layers[l][i];
 			// Request frontier
-			node->pareto_frontier = mgmr->request();
+			node->pareto_frontier = request_frontier(mgmr, parallel_mode);
 
 			// add incoming one arcs
 			for (vector<Node*>::iterator prev = node->prev[1].begin(); prev != node->prev[1].end(); ++prev) {
@@ -279,10 +334,14 @@ inline void expand_layer_topdown(BDD* bdd, const int l, const bool maximization,
 			}
 		}
 	} else {
-		for (int i = 0; i < bdd->layers[l].size(); ++i) {
-			node = bdd->layers[l][i];
+        const int layer_size = bdd->layers[l].size();
+#ifdef _OPENMP
+#pragma omp parallel for if(parallel_mode) num_threads(threads) schedule(dynamic)
+#endif
+		for (int i = 0; i < layer_size; ++i) {
+            Node* node = bdd->layers[l][i];
 			// Request frontier
-			node->pareto_frontier = mgmr->request();
+			node->pareto_frontier = request_frontier(mgmr, parallel_mode);
 
 			// add incoming zero arcs
 			for (vector<Node*>::iterator prev = node->prev[0].begin(); prev != node->prev[0].end(); ++prev) {
@@ -301,7 +360,7 @@ inline void expand_layer_topdown(BDD* bdd, const int l, const bool maximization,
 	
 	// deallocate previous layer
 	for (int i = 0; i < bdd->layers[l-1].size(); ++i) {
-		mgmr->deallocate( bdd->layers[l-1][i]->pareto_frontier );
+		recycle_frontier(mgmr, bdd->layers[l-1][i]->pareto_frontier, parallel_mode);
 	}
 }
 
@@ -309,14 +368,19 @@ inline void expand_layer_topdown(BDD* bdd, const int l, const bool maximization,
 //
 // Expand pareto frontier / bottomup version
 //
-inline void expand_layer_bottomup(BDD* bdd, const int l, const bool maximization, ParetoFrontierManager* mgmr) {
-	Node* node;
+inline void expand_layer_bottomup(BDD* bdd, const int l, const bool maximization, ParetoFrontierManager* mgmr, const int cpu_threads) {
+    const int threads = normalized_cpu_threads(cpu_threads);
+    const bool parallel_mode = use_parallel_cpu(threads);
 	if (maximization) {
-		for (int i = 0; i < bdd->layers[l].size(); ++i) {
-			node = bdd->layers[l][i];
+        const int layer_size = bdd->layers[l].size();
+#ifdef _OPENMP
+#pragma omp parallel for if(parallel_mode) num_threads(threads) schedule(dynamic)
+#endif
+		for (int i = 0; i < layer_size; ++i) {
+            Node* node = bdd->layers[l][i];
 
 			// Request frontier
-			node->pareto_frontier_bu = mgmr->request();
+			node->pareto_frontier_bu = request_frontier(mgmr, parallel_mode);
 
 			// add outgoing one arcs
 			if (node->arcs[1] != NULL) {
@@ -329,11 +393,15 @@ inline void expand_layer_bottomup(BDD* bdd, const int l, const bool maximization
 			}
 		}
 	} else {
-		for (int i = 0; i < bdd->layers[l].size(); ++i) {
-			node = bdd->layers[l][i];
+        const int layer_size = bdd->layers[l].size();
+#ifdef _OPENMP
+#pragma omp parallel for if(parallel_mode) num_threads(threads) schedule(dynamic)
+#endif
+		for (int i = 0; i < layer_size; ++i) {
+            Node* node = bdd->layers[l][i];
 
 			// Request frontier
-			node->pareto_frontier_bu = mgmr->request();
+			node->pareto_frontier_bu = request_frontier(mgmr, parallel_mode);
 
 			// add outgoing zero arcs
 			if (node->arcs[0] != NULL) {
@@ -348,7 +416,7 @@ inline void expand_layer_bottomup(BDD* bdd, const int l, const bool maximization
 	}
 	// deallocate next layer
 	for (int i = 0; i < bdd->layers[l+1].size(); ++i) {
-		mgmr->deallocate( bdd->layers[l+1][i]->pareto_frontier_bu );
+		recycle_frontier(mgmr, bdd->layers[l+1][i]->pareto_frontier_bu, parallel_mode);
 	}
 }
 
@@ -356,12 +424,17 @@ inline void expand_layer_bottomup(BDD* bdd, const int l, const bool maximization
 //
 // Expand pareto frontier / topdown version
 //
-inline void expand_layer_topdown(MDD* mdd, const int l, ParetoFrontierManager* mgmr) {
-	MDDNode* node = NULL;
-	for (int i = 0; i < mdd->layers[l].size(); ++i) {
-		node = mdd->layers[l][i];
+inline void expand_layer_topdown(MDD* mdd, const int l, ParetoFrontierManager* mgmr, const int cpu_threads) {
+    const int threads = normalized_cpu_threads(cpu_threads);
+    const bool parallel_mode = use_parallel_cpu(threads);
+    const int layer_size = mdd->layers[l].size();
+#ifdef _OPENMP
+#pragma omp parallel for if(parallel_mode) num_threads(threads) schedule(dynamic)
+#endif
+	for (int i = 0; i < layer_size; ++i) {
+        MDDNode* node = mdd->layers[l][i];
 		// Request frontier
-		node->pareto_frontier = mgmr->request();
+		node->pareto_frontier = request_frontier(mgmr, parallel_mode);
 
 		// add incoming one arcs
 		for (MDDArc* arc : node->in_arcs_list) {
@@ -371,7 +444,7 @@ inline void expand_layer_topdown(MDD* mdd, const int l, ParetoFrontierManager* m
 
 	// deallocate previous layer
 	for (int i = 0; i < mdd->layers[l-1].size(); ++i) {
-		mgmr->deallocate( mdd->layers[l-1][i]->pareto_frontier );
+		recycle_frontier(mgmr, mdd->layers[l-1][i]->pareto_frontier, parallel_mode);
 		delete mdd->layers[l-1][i];
 	}
 }
@@ -380,12 +453,17 @@ inline void expand_layer_topdown(MDD* mdd, const int l, ParetoFrontierManager* m
 //
 // Expand pareto frontier / topdown version
 //
-inline void expand_layer_bottomup(MDD* mdd, const int l, ParetoFrontierManager* mgmr) {
-	MDDNode* node = NULL;
-	for (int i = 0; i < mdd->layers[l].size(); ++i) {
-		node = mdd->layers[l][i];
+inline void expand_layer_bottomup(MDD* mdd, const int l, ParetoFrontierManager* mgmr, const int cpu_threads) {
+    const int threads = normalized_cpu_threads(cpu_threads);
+    const bool parallel_mode = use_parallel_cpu(threads);
+    const int layer_size = mdd->layers[l].size();
+#ifdef _OPENMP
+#pragma omp parallel for if(parallel_mode) num_threads(threads) schedule(dynamic)
+#endif
+	for (int i = 0; i < layer_size; ++i) {
+        MDDNode* node = mdd->layers[l][i];
 		// Request frontier
-		node->pareto_frontier_bu = mgmr->request();
+		node->pareto_frontier_bu = request_frontier(mgmr, parallel_mode);
 
 		// add incoming one arcs
 		for (MDDArc* arc : node->out_arcs_list) {
@@ -395,7 +473,7 @@ inline void expand_layer_bottomup(MDD* mdd, const int l, ParetoFrontierManager* 
 
 	// deallocate next layer
 	for (int i = 0; i < mdd->layers[l+1].size(); ++i) {
-		mgmr->deallocate( mdd->layers[l+1][i]->pareto_frontier_bu );
+		recycle_frontier(mgmr, mdd->layers[l+1][i]->pareto_frontier_bu, parallel_mode);
 		delete mdd->layers[l+1][i];
 	}
 }
@@ -475,24 +553,26 @@ struct CompareMDDNode {
 //
 // Find pareto frontier using dynamic layer cutset
 //
-ParetoFrontier* BDDMultiObj::pareto_frontier_dynamic_layer_cutset(BDD* bdd, bool maximization, const int problem_type, const int dominance_strategy, MultiObjectiveStats* stats) {
+ParetoFrontier* BDDMultiObj::pareto_frontier_dynamic_layer_cutset(BDD* bdd, bool maximization, const int problem_type, const int dominance_strategy, MultiObjectiveStats* stats, int cpu_threads) {
 	// Create pareto frontier manager
 	ParetoFrontierManager* mgmr = new ParetoFrontierManager(bdd->get_width());
+    const int threads = normalized_cpu_threads(cpu_threads);
+    const bool parallel_mode = use_parallel_cpu(threads);
 
 	// Create root and terminal frontiers
 	ObjType sol[NOBJS];
 	memset(sol, 0, sizeof(ObjType)*NOBJS);
 
-	bdd->get_root()->pareto_frontier = mgmr->request();
+	bdd->get_root()->pareto_frontier = request_frontier(mgmr, parallel_mode);
 	bdd->get_root()->pareto_frontier->add(sol);
 
-	bdd->get_terminal()->pareto_frontier_bu = mgmr->request();
+	bdd->get_terminal()->pareto_frontier_bu = request_frontier(mgmr, parallel_mode);
 	bdd->get_terminal()->pareto_frontier_bu->add(sol);
 
 	// Initialize stats
 	stats->pareto_dominance_time = 0;
 	stats->pareto_dominance_filtered = 0;
-    clock_t time_filter = 0, init;
+    clock_t init;
 
 	// Current layers
 	int layer_topdown = 0;
@@ -502,29 +582,36 @@ ParetoFrontier* BDDMultiObj::pareto_frontier_dynamic_layer_cutset(BDD* bdd, bool
 	int val_topdown = 0;
 	int val_bottomup = 0;
 
-	int old_topdown = -1;
 	while (layer_topdown != layer_bottomup) {
 //		if (layer_topdown <= 3) {
 		if (val_topdown <= val_bottomup) {
             // Expand topdown
-			expand_layer_topdown(bdd, ++layer_topdown, maximization, mgmr);
+			expand_layer_topdown(bdd, ++layer_topdown, maximization, mgmr, threads);
 			// Recompute layer value
 			val_topdown = 0;
-			for (int i = 0; i < bdd->layers[layer_topdown].size(); ++i) {
+            const int layer_size = bdd->layers[layer_topdown].size();
+#ifdef _OPENMP
+#pragma omp parallel for if(parallel_mode) num_threads(threads) reduction(+:val_topdown)
+#endif
+			for (int i = 0; i < layer_size; ++i) {
 				val_topdown += topdown_layer_value(bdd, bdd->layers[layer_topdown][i]);
 			}
 			//cout << "DOMINANCE: " << dominance_strategy << endl;
             if (dominance_strategy > 0) {
                 init = clock();
 				BDDMultiObj::filter_dominance(bdd, layer_topdown, problem_type, dominance_strategy, stats);
-                stats->pareto_dominance_filtered += clock()-init;
+                stats->pareto_dominance_time += clock()-init;
 			}
 		} else {
 			// Expand layer bottomup
-			expand_layer_bottomup(bdd, --layer_bottomup, maximization, mgmr);
+			expand_layer_bottomup(bdd, --layer_bottomup, maximization, mgmr, threads);
 			// Recompute layer value
 			val_bottomup = 0;
-			for (int i = 0; i < bdd->layers[layer_bottomup].size(); ++i) {
+            const int layer_size = bdd->layers[layer_bottomup].size();
+#ifdef _OPENMP
+#pragma omp parallel for if(parallel_mode) num_threads(threads) reduction(+:val_bottomup)
+#endif
+			for (int i = 0; i < layer_size; ++i) {
 				val_bottomup += bottomup_layer_value(bdd, bdd->layers[layer_bottomup][i]);
 			}
 		}
@@ -561,17 +648,46 @@ ParetoFrontier* BDDMultiObj::pareto_frontier_dynamic_layer_cutset(BDD* bdd, bool
 	ParetoFrontier* paretoFrontier = new ParetoFrontier;
 	paretoFrontier->sols.reserve( expected_size * NOBJS );
 
-	//cout << "\tconvoluting..." << endl;
-	for (int i = 0; i < cutset.size(); ++i) {
-		Node* node = cutset[i];
-		assert( node->pareto_frontier != NULL );
-		assert( node->pareto_frontier_bu != NULL );
-		//cout << "\t\tNode " << node->layer << "," << node->index << endl;
-		paretoFrontier->convolute( *(node->pareto_frontier), *(node->pareto_frontier_bu) );
-	}
+    if (parallel_mode && cutset.size() > 1) {
+#ifdef _OPENMP
+        vector<ParetoFrontier*> partial(threads, NULL);
+#pragma omp parallel num_threads(threads)
+        {
+            const int tid = omp_get_thread_num();
+            ParetoFrontier* local_frontier = new ParetoFrontier;
+            partial[tid] = local_frontier;
+#pragma omp for schedule(dynamic)
+            for (int i = 0; i < cutset.size(); ++i) {
+                Node* node = cutset[i];
+                assert( node->pareto_frontier != NULL );
+                assert( node->pareto_frontier_bu != NULL );
+                local_frontier->convolute( *(node->pareto_frontier), *(node->pareto_frontier_bu) );
+            }
+        }
+        for (int t = 0; t < threads; ++t) {
+            if (partial[t] != NULL) {
+                paretoFrontier->merge(*partial[t]);
+                delete partial[t];
+            }
+        }
+#else
+        for (int i = 0; i < cutset.size(); ++i) {
+            Node* node = cutset[i];
+            assert( node->pareto_frontier != NULL );
+            assert( node->pareto_frontier_bu != NULL );
+            paretoFrontier->convolute( *(node->pareto_frontier), *(node->pareto_frontier_bu) );
+        }
+#endif
+    } else {
+        for (int i = 0; i < cutset.size(); ++i) {
+            Node* node = cutset[i];
+            assert( node->pareto_frontier != NULL );
+            assert( node->pareto_frontier_bu != NULL );
+            paretoFrontier->convolute( *(node->pareto_frontier), *(node->pareto_frontier_bu) );
+        }
+    }
 
-	//cout << "\tdeallocating..." << endl;
-    //cout << endl << "Filtering time: " << (double)time_filter/CLOCKS_PER_SEC << endl;
+    paretoFrontier->sort_lexicographic_ascending();
     
     // deallocate manager
 	delete mgmr;
@@ -1729,11 +1845,12 @@ void BDDMultiObj::filter_dominance_setcovering(BDD* bdd, const int layer, MultiO
 //
 // Find pareto frontier using top-down approach for MDDs
 //
-ParetoFrontier* BDDMultiObj::pareto_frontier_topdown(MDD* mdd, MultiObjectiveStats* stats) {
+ParetoFrontier* BDDMultiObj::pareto_frontier_topdown(MDD* mdd, MultiObjectiveStats* stats, int cpu_threads) {
 	// Initialize stats
 	stats->pareto_dominance_time = 0;
 	stats->pareto_dominance_filtered = 0;
-    clock_t time_filter = 0, init;
+    const int threads = normalized_cpu_threads(cpu_threads);
+    const bool parallel_mode = use_parallel_cpu(threads);
 	
 	// Initialize manager
 	ParetoFrontierManager* mgmr = new ParetoFrontierManager(mdd->get_width());
@@ -1741,19 +1858,19 @@ ParetoFrontier* BDDMultiObj::pareto_frontier_topdown(MDD* mdd, MultiObjectiveSta
 	// Root node
     ObjType zero_array[NOBJS];
 	memset(zero_array, 0, sizeof(ObjType)*NOBJS);
-	mdd->get_root()->pareto_frontier = mgmr->request();
+	mdd->get_root()->pareto_frontier = request_frontier(mgmr, parallel_mode);
 	mdd->get_root()->pareto_frontier->add(zero_array);
     
 	// Generate frontiers for each node
 	for (int l = 1; l < mdd->num_layers; ++l) {	
 		cout << "Layer " << l << endl;
-		for (MDDNode* node : mdd->layers[l]) {
-			int id = node->index;
-
-			// Request frontier
-			node->pareto_frontier = mgmr->request();
-			
-			// add incoming one arcs
+        const int layer_size = mdd->layers[l].size();
+#ifdef _OPENMP
+#pragma omp parallel for if(parallel_mode) num_threads(threads) schedule(dynamic)
+#endif
+		for (int i = 0; i < layer_size; ++i) {
+            MDDNode* node = mdd->layers[l][i];
+			node->pareto_frontier = request_frontier(mgmr, parallel_mode);
 			for (MDDArc* arc : node->in_arcs_list) {
 				node->pareto_frontier->merge(*(arc->tail->pareto_frontier), arc->weights);
 			}
@@ -1761,13 +1878,16 @@ ParetoFrontier* BDDMultiObj::pareto_frontier_topdown(MDD* mdd, MultiObjectiveSta
 
 		// Deallocate frontier from previous layer
 		for (MDDNode* node : mdd->layers[l-1]) {
-			mgmr->deallocate( node->pareto_frontier );
+			recycle_frontier(mgmr, node->pareto_frontier, parallel_mode);
 		}
 	}		
 
+    ParetoFrontier* frontier = mdd->get_terminal()->pareto_frontier;
+    frontier->sort_lexicographic_ascending();
+
     // Erase memory
 	delete mgmr;
-	return mdd->get_terminal()->pareto_frontier;
+	return frontier;
 }
 
 //
@@ -1781,6 +1901,7 @@ ParetoFrontier* BDDMultiObj::pareto_frontier_dynamic_layer_cutset_cuda(MDD* mdd,
         stats->layer_coupling = 0;
     }
 
+#ifdef USE_CUDA
     if (coupled_cuda_enumerate == NULL) {
         if (reason != NULL) {
             *reason = "CUDA coupled enumeration symbol is unavailable in this binary";
@@ -1795,30 +1916,39 @@ ParetoFrontier* BDDMultiObj::pareto_frontier_dynamic_layer_cutset_cuda(MDD* mdd,
         *reason = "CUDA coupled enumeration failed";
     }
     return frontier;
+#else
+    (void)mdd;
+    (void)kernel_version;
+    if (reason != NULL) {
+        *reason = "GPU backend requested but binary was built without CUDA support";
+    }
+    return NULL;
+#endif
 }
 
 
 //
 // Find pareto frontier using dynamic layer cutset
 //
-ParetoFrontier* BDDMultiObj::pareto_frontier_dynamic_layer_cutset(MDD* mdd, MultiObjectiveStats* stats) {
+ParetoFrontier* BDDMultiObj::pareto_frontier_dynamic_layer_cutset(MDD* mdd, MultiObjectiveStats* stats, int cpu_threads) {
 	// Create pareto frontier manager
 	ParetoFrontierManager* mgmr = new ParetoFrontierManager(mdd->get_width());
+    const int threads = normalized_cpu_threads(cpu_threads);
+    const bool parallel_mode = use_parallel_cpu(threads);
 
 	// Create root and terminal frontiers
 	ObjType sol[NOBJS];
 	memset(sol, 0, sizeof(ObjType)*NOBJS);
 
-	mdd->get_root()->pareto_frontier = mgmr->request();
+	mdd->get_root()->pareto_frontier = request_frontier(mgmr, parallel_mode);
 	mdd->get_root()->pareto_frontier->add(sol);
 
-	mdd->get_terminal()->pareto_frontier_bu = mgmr->request();
+	mdd->get_terminal()->pareto_frontier_bu = request_frontier(mgmr, parallel_mode);
 	mdd->get_terminal()->pareto_frontier_bu->add(sol);
 
 	// Initialize stats
 	stats->pareto_dominance_time = 0;
 	stats->pareto_dominance_filtered = 0;
-    clock_t time_filter = 0, init;
 
 	// Current layers
 	int layer_topdown = 0;
@@ -1828,23 +1958,30 @@ ParetoFrontier* BDDMultiObj::pareto_frontier_dynamic_layer_cutset(MDD* mdd, Mult
 	int val_topdown = 0;
 	int val_bottomup = 0;
 
-	int old_topdown = -1;
 	while (layer_topdown != layer_bottomup) {
 		// cout << "Layer topdown: " << layer_topdown << " - layer bottomup: " << layer_bottomup << endl;
 		if (val_topdown <= val_bottomup) {
             // Expand topdown
-			expand_layer_topdown(mdd, ++layer_topdown, mgmr);
+			expand_layer_topdown(mdd, ++layer_topdown, mgmr, threads);
 			// Recompute layer value
 			val_topdown = 0;
-			for (int i = 0; i < mdd->layers[layer_topdown].size(); ++i) {
+            const int layer_size = mdd->layers[layer_topdown].size();
+#ifdef _OPENMP
+#pragma omp parallel for if(parallel_mode) num_threads(threads) reduction(+:val_topdown)
+#endif
+			for (int i = 0; i < layer_size; ++i) {
 				val_topdown += topdown_layer_value(mdd, mdd->layers[layer_topdown][i]);
 			}
 		} else {
 			// Expand layer bottomup
-			expand_layer_bottomup(mdd, --layer_bottomup, mgmr);
+			expand_layer_bottomup(mdd, --layer_bottomup, mgmr, threads);
 			// Recompute layer value
 			val_bottomup = 0;
-			for (int i = 0; i < mdd->layers[layer_bottomup].size(); ++i) {
+            const int layer_size = mdd->layers[layer_bottomup].size();
+#ifdef _OPENMP
+#pragma omp parallel for if(parallel_mode) num_threads(threads) reduction(+:val_bottomup)
+#endif
+			for (int i = 0; i < layer_size; ++i) {
 				val_bottomup += bottomup_layer_value(mdd, mdd->layers[layer_bottomup][i]);
 			}
 		}
@@ -1867,13 +2004,46 @@ ParetoFrontier* BDDMultiObj::pareto_frontier_dynamic_layer_cutset(MDD* mdd, Mult
 	ParetoFrontier* paretoFrontier = new ParetoFrontier;
 	paretoFrontier->sols.reserve( expected_size * NOBJS );
 
-	for (int i = 0; i < cutset.size(); ++i) {
-		MDDNode* node = cutset[i];
-		assert( node->pareto_frontier != NULL );
-		assert( node->pareto_frontier_bu != NULL );
+    if (parallel_mode && cutset.size() > 1) {
+#ifdef _OPENMP
+        vector<ParetoFrontier*> partial(threads, NULL);
+#pragma omp parallel num_threads(threads)
+        {
+            const int tid = omp_get_thread_num();
+            ParetoFrontier* local_frontier = new ParetoFrontier;
+            partial[tid] = local_frontier;
+#pragma omp for schedule(dynamic)
+            for (int i = 0; i < cutset.size(); ++i) {
+                MDDNode* node = cutset[i];
+                assert( node->pareto_frontier != NULL );
+                assert( node->pareto_frontier_bu != NULL );
+                local_frontier->convolute( *(node->pareto_frontier), *(node->pareto_frontier_bu) );
+            }
+        }
+        for (int t = 0; t < threads; ++t) {
+            if (partial[t] != NULL) {
+                paretoFrontier->merge(*partial[t]);
+                delete partial[t];
+            }
+        }
+#else
+        for (int i = 0; i < cutset.size(); ++i) {
+            MDDNode* node = cutset[i];
+            assert( node->pareto_frontier != NULL );
+            assert( node->pareto_frontier_bu != NULL );
+            paretoFrontier->convolute( *(node->pareto_frontier), *(node->pareto_frontier_bu) );
+        }
+#endif
+    } else {
+        for (int i = 0; i < cutset.size(); ++i) {
+            MDDNode* node = cutset[i];
+            assert( node->pareto_frontier != NULL );
+            assert( node->pareto_frontier_bu != NULL );
+            paretoFrontier->convolute( *(node->pareto_frontier), *(node->pareto_frontier_bu) );
+        }
+    }
 
-		paretoFrontier->convolute( *(node->pareto_frontier), *(node->pareto_frontier_bu) );
-	}
+    paretoFrontier->sort_lexicographic_ascending();
     
     // deallocate manager
 	delete mgmr;

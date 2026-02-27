@@ -7,6 +7,8 @@
 #include <cstdlib>
 #include <string>
 #include <cstdio>
+#include <cerrno>
+#include <climits>
 
 #include "bdd/bdd.hpp"
 #include "bdd/bdd_alg.hpp"
@@ -73,6 +75,32 @@ static string derive_default_frontier_path(const string &input_path)
     }
 
     return base + ".frontier.csv.gz";
+}
+
+static bool parse_positive_int(const string &value, int *out_value)
+{
+    if (value.empty())
+    {
+        return false;
+    }
+
+    errno = 0;
+    char *end_ptr = NULL;
+    long parsed = strtol(value.c_str(), &end_ptr, 10);
+    if (errno != 0 || end_ptr == value.c_str() || *end_ptr != '\0')
+    {
+        return false;
+    }
+    if (parsed <= 0 || parsed > INT_MAX)
+    {
+        return false;
+    }
+
+    if (out_value != NULL)
+    {
+        *out_value = static_cast<int>(parsed);
+    }
+    return true;
 }
 
 static bool write_frontier_gzip_csv(const ParetoFrontier *frontier, const int problem_type, const string &out_path, string *error)
@@ -173,13 +201,13 @@ int main(int argc, char *argv[])
     enum Backend
     {
         BACKEND_CPU = 0,
-        BACKEND_CUDA = 1
+        BACKEND_GPU = 1
     };
 
     auto print_usage = []()
     {
         cout << '\n';
-        cout << "Usage: multiobj_nobjs<NUM_OBJS> [input file] [problem type] [preprocess?] [method] [appr-S] [appr-T] [dominance] [backend] [kernel_version] [--save-frontier] [--frontier-out <path>]\n";
+        cout << "Usage: multiobj_nobjs<NUM_OBJS> [input file] [problem type] [preprocess?] [method] [appr-S] [appr-T] [dominance] [options]\n";
 
         cout << "\n\twhere:";
 
@@ -206,15 +234,21 @@ int main(int argc, char *argv[])
         cout << "\t\tdominance = 1:  state dominance strategy 1\n";
 
         cout << "\n";
-        cout << "\t\tbackend = cpu: force CPU pareto frontier enumeration\n";
-        cout << "\t\tbackend = cuda: force CUDA pareto frontier enumeration (method 1 only)\n";
-        cout << "\t\tbackend omitted: defaults to cpu\n";
+        cout << "\t\tNamed backend options:\n";
+        cout << "\t\t\t--backend cpu|gpu\n";
+        cout << "\t\t\t--cpu-threads <N>   (cpu only)\n";
+        cout << "\t\t\t--kernel <K>        (gpu only, K in {1,2,3})\n";
+        cout << "\t\tShorthand backend options:\n";
+        cout << "\t\t\tcpu [N]\n";
+        cout << "\t\t\tgpu [K]\n";
+        cout << "\t\tbackend omitted defaults to cpu\n";
+        cout << "\t\tcpu threads default to OMP_NUM_THREADS if valid, otherwise 1\n";
 
         cout << "\n";
-        cout << "\t\tkernel_version = 1: one block per node\n";
-        cout << "\t\tkernel_version = 2: fixed number of blocks per node (2D grid)\n";
-        cout << "\t\tkernel_version = 3: dynamic blocks per node with binary-search destination lookup (1D grid)\n";
-        cout << "\t\tkernel_version omitted with backend=cuda: defaults by problem type\n";
+        cout << "\t\tkernel = 1: one block per node\n";
+        cout << "\t\tkernel = 2: fixed number of blocks per node (2D grid)\n";
+        cout << "\t\tkernel = 3: dynamic blocks per node with binary-search destination lookup (1D grid)\n";
+        cout << "\t\tkernel omitted with backend=gpu: defaults by problem type\n";
         cout << "\t\t\tproblem_type=1 (knapsack): 1\n";
         cout << "\t\t\tproblem_type=2 (set packing): 2\n";
         cout << "\t\t\tproblem_type=3 (set covering): 1\n";
@@ -244,8 +278,13 @@ int main(int argc, char *argv[])
     int dominance = atoi(argv[7]);
 
     Backend backend = BACKEND_CPU;
+    bool backend_set = false;
+    bool backend_from_named = false;
+    bool backend_from_shorthand = false;
     int kernel_version = -1;
     bool kernel_version_set = false;
+    int cpu_threads = 1;
+    bool cpu_threads_set = false;
 
     bool save_frontier = false;
     string frontier_out_path;
@@ -253,24 +292,161 @@ int main(int argc, char *argv[])
     for (int i = 8; i < argc; ++i)
     {
         string token(argv[i]);
-        if (token == "cpu")
+        if (token == "--backend")
         {
-            backend = BACKEND_CPU;
-        }
-        else if (token == "cuda")
-        {
-            backend = BACKEND_CUDA;
-        }
-        else if (token == "1" || token == "2" || token == "3")
-        {
-            if (kernel_version_set)
+            if (backend_from_shorthand)
             {
-                cout << "Error - kernel_version provided multiple times." << endl;
+                cout << "Error - cannot mix --backend with shorthand backend token." << endl;
                 print_usage();
                 exit(1);
             }
-            kernel_version = atoi(token.c_str());
+            if (backend_set)
+            {
+                cout << "Error - backend provided multiple times." << endl;
+                print_usage();
+                exit(1);
+            }
+            if (i + 1 >= argc)
+            {
+                cout << "Error - --backend requires a value (cpu or gpu)." << endl;
+                print_usage();
+                exit(1);
+            }
+            string backend_token(argv[++i]);
+            if (backend_token == "cpu")
+            {
+                backend = BACKEND_CPU;
+            }
+            else if (backend_token == "gpu")
+            {
+                backend = BACKEND_GPU;
+            }
+            else if (backend_token == "cuda")
+            {
+                cout << "Error - backend token 'cuda' is unsupported; use 'gpu'." << endl;
+                exit(1);
+            }
+            else
+            {
+                cout << "Error - invalid backend '" << backend_token << "'. Use cpu or gpu." << endl;
+                print_usage();
+                exit(1);
+            }
+            backend_set = true;
+            backend_from_named = true;
+        }
+        else if (token == "--cpu-threads")
+        {
+            if (cpu_threads_set)
+            {
+                cout << "Error - cpu thread count provided multiple times." << endl;
+                print_usage();
+                exit(1);
+            }
+            if (i + 1 >= argc)
+            {
+                cout << "Error - --cpu-threads requires a positive integer." << endl;
+                print_usage();
+                exit(1);
+            }
+            string value(argv[++i]);
+            if (!parse_positive_int(value, &cpu_threads))
+            {
+                cout << "Error - invalid --cpu-threads value '" << value << "' (expected positive integer)." << endl;
+                exit(1);
+            }
+            cpu_threads_set = true;
+        }
+        else if (token == "--kernel")
+        {
+            if (kernel_version_set)
+            {
+                cout << "Error - kernel provided multiple times." << endl;
+                print_usage();
+                exit(1);
+            }
+            if (i + 1 >= argc)
+            {
+                cout << "Error - --kernel requires a value in {1,2,3}." << endl;
+                print_usage();
+                exit(1);
+            }
+            string value(argv[++i]);
+            if (!parse_positive_int(value, &kernel_version) || kernel_version < 1 || kernel_version > 3)
+            {
+                cout << "Error - invalid --kernel value '" << value << "' (expected 1, 2, or 3)." << endl;
+                exit(1);
+            }
             kernel_version_set = true;
+        }
+        else if (token == "cpu" || token == "gpu")
+        {
+            if (backend_from_named)
+            {
+                cout << "Error - cannot mix shorthand backend token with --backend." << endl;
+                print_usage();
+                exit(1);
+            }
+            if (backend_set)
+            {
+                cout << "Error - backend provided multiple times." << endl;
+                print_usage();
+                exit(1);
+            }
+
+            backend = (token == "cpu" ? BACKEND_CPU : BACKEND_GPU);
+            backend_set = true;
+            backend_from_shorthand = true;
+
+            if (i + 1 < argc)
+            {
+                string next_token(argv[i + 1]);
+                errno = 0;
+                char *end_ptr = NULL;
+                long parsed_raw = strtol(next_token.c_str(), &end_ptr, 10);
+                const bool next_is_integer = (errno == 0 && end_ptr != next_token.c_str() && *end_ptr == '\0');
+                if (next_is_integer)
+                {
+                    if (token == "cpu")
+                    {
+                        if (cpu_threads_set)
+                        {
+                            cout << "Error - cpu threads provided multiple times." << endl;
+                            print_usage();
+                            exit(1);
+                        }
+                        if (parsed_raw <= 0 || parsed_raw > INT_MAX)
+                        {
+                            cout << "Error - invalid cpu shorthand thread count '" << next_token << "' (expected positive integer)." << endl;
+                            exit(1);
+                        }
+                        cpu_threads = static_cast<int>(parsed_raw);
+                        cpu_threads_set = true;
+                    }
+                    else
+                    {
+                        if (kernel_version_set)
+                        {
+                            cout << "Error - kernel provided multiple times." << endl;
+                            print_usage();
+                            exit(1);
+                        }
+                        if (parsed_raw < 1 || parsed_raw > 3)
+                        {
+                            cout << "Error - invalid gpu shorthand kernel '" << next_token << "' (expected 1, 2, or 3)." << endl;
+                            exit(1);
+                        }
+                        kernel_version = static_cast<int>(parsed_raw);
+                        kernel_version_set = true;
+                    }
+                    ++i;
+                }
+            }
+        }
+        else if (token == "cuda")
+        {
+            cout << "Error - backend token 'cuda' is unsupported; use 'gpu'." << endl;
+            exit(1);
         }
         else if (token == "--save-frontier")
         {
@@ -294,7 +470,15 @@ int main(int argc, char *argv[])
         }
         else
         {
-            cout << "Error - unrecognized optional argument '" << token << "'." << endl;
+            int parsed_numeric = 0;
+            if (parse_positive_int(token, &parsed_numeric))
+            {
+                cout << "Error - positional numeric argument '" << token << "' must immediately follow shorthand backend token cpu|gpu." << endl;
+            }
+            else
+            {
+                cout << "Error - unrecognized optional argument '" << token << "'." << endl;
+            }
             print_usage();
             exit(1);
         }
@@ -305,7 +489,19 @@ int main(int argc, char *argv[])
         frontier_out_path = derive_default_frontier_path(argv[1]);
     }
 
-    if (backend == BACKEND_CUDA && !kernel_version_set)
+    if (backend == BACKEND_GPU && cpu_threads_set)
+    {
+        cout << "Error - cpu thread options are not valid with backend=gpu." << endl;
+        exit(1);
+    }
+
+    if (backend == BACKEND_CPU && kernel_version_set)
+    {
+        cout << "Error - --kernel is only valid with backend=gpu." << endl;
+        exit(1);
+    }
+
+    if (backend == BACKEND_GPU && !kernel_version_set)
     {
         if (problem_type == 1 || problem_type == 3)
         {
@@ -325,10 +521,23 @@ int main(int argc, char *argv[])
             exit(1);
         }
     }
-
-    if (backend == BACKEND_CUDA && method != 1 && method != 3)
+    else if (backend == BACKEND_CPU && !cpu_threads_set)
     {
-        cout << "Error - CUDA backend is unsupported for method " << method << "." << endl;
+        const char *env_threads = getenv("OMP_NUM_THREADS");
+        int parsed_env_threads = 0;
+        if (env_threads != NULL && parse_positive_int(string(env_threads), &parsed_env_threads))
+        {
+            cpu_threads = parsed_env_threads;
+        }
+        else
+        {
+            cpu_threads = 1;
+        }
+    }
+
+    if (backend == BACKEND_GPU && method != 1 && method != 3)
+    {
+        cout << "Error - GPU backend is unsupported for method " << method << "." << endl;
         exit(1);
     }
 
@@ -480,30 +689,30 @@ int main(int argc, char *argv[])
         ParetoFrontier *pareto_frontier = NULL;
 
         if (method == 1) { // Top-down
-            if (backend == BACKEND_CUDA) {
+            if (backend == BACKEND_GPU) {
                 string cuda_reason;
                 pareto_frontier = BDDMultiObj::pareto_frontier_topdown_cuda(mdd, statsMultiObj, &cuda_reason, kernel_version);
                 if (pareto_frontier == NULL) {
-                    cout << "Error - CUDA backend requested but top-down enumeration failed";
+                    cout << "Error - GPU backend requested but top-down enumeration failed";
                     if (!cuda_reason.empty()) cout << ": " << cuda_reason;
                     cout << endl;
                     exit(1);
                 }
             } else {
-                pareto_frontier = BDDMultiObj::pareto_frontier_topdown(mdd, statsMultiObj);
+                pareto_frontier = BDDMultiObj::pareto_frontier_topdown(mdd, statsMultiObj, cpu_threads);
             }
         } else if (method == 3) { // Coupled
-            if (backend == BACKEND_CUDA) {
+            if (backend == BACKEND_GPU) {
                 string cuda_reason;
                 pareto_frontier = BDDMultiObj::pareto_frontier_dynamic_layer_cutset_cuda(mdd, statsMultiObj, &cuda_reason, kernel_version);
                 if (pareto_frontier == NULL) {
-                    cout << "Error - CUDA backend requested but coupled enumeration failed";
+                    cout << "Error - GPU backend requested but coupled enumeration failed";
                     if (!cuda_reason.empty()) cout << ": " << cuda_reason;
                     cout << endl;
                     exit(1);
                 }
             } else {
-                pareto_frontier = BDDMultiObj::pareto_frontier_dynamic_layer_cutset(mdd, statsMultiObj);
+                pareto_frontier = BDDMultiObj::pareto_frontier_dynamic_layer_cutset(mdd, statsMultiObj, cpu_threads);
             }
         } else {
             cout << "Error - method " << method << " not valid for TSP" << endl;
@@ -563,13 +772,13 @@ int main(int argc, char *argv[])
     if (method == 1)
     {
         // -- Optimal BFS algorithm: top-down --
-        if (backend == BACKEND_CUDA)
+        if (backend == BACKEND_GPU)
         {
             string cuda_reason;
             pareto_frontier = BDDMultiObj::pareto_frontier_topdown_cuda(bdd, maximization, problem_type, dominance, statsMultiObj, &cuda_reason, kernel_version);
             if (pareto_frontier == NULL)
             {
-                cout << "Error - CUDA backend requested but top-down enumeration failed";
+                cout << "Error - GPU backend requested but top-down enumeration failed";
                 if (!cuda_reason.empty())
                 {
                     cout << ": " << cuda_reason;
@@ -580,28 +789,28 @@ int main(int argc, char *argv[])
         }
         else
         {
-            pareto_frontier = BDDMultiObj::pareto_frontier_topdown(bdd, maximization, problem_type, dominance, statsMultiObj);
+            pareto_frontier = BDDMultiObj::pareto_frontier_topdown(bdd, maximization, problem_type, dominance, statsMultiObj, cpu_threads);
         }
     }
     else if (method == 2)
     {
         // -- Optimal BFS algorithm: bottom-up --
-        if (backend == BACKEND_CUDA)
+        if (backend == BACKEND_GPU)
         {
-            cout << "Error - CUDA backend is unsupported for method 2." << endl;
+            cout << "Error - GPU backend is unsupported for method 2." << endl;
             exit(1);
         }
-        pareto_frontier = BDDMultiObj::pareto_frontier_bottomup(bdd, maximization, problem_type, dominance, statsMultiObj);
+        pareto_frontier = BDDMultiObj::pareto_frontier_bottomup(bdd, maximization, problem_type, dominance, statsMultiObj, cpu_threads);
     }
     else if (method == 3)
     {
         // -- Dynamic layer cutset --
-        if (backend == BACKEND_CUDA)
+        if (backend == BACKEND_GPU)
         {
-            cout << "Error - CUDA backend is unsupported for method 3." << endl;
+            cout << "Error - GPU backend is unsupported for method 3." << endl;
             exit(1);
         }
-        pareto_frontier = BDDMultiObj::pareto_frontier_dynamic_layer_cutset(bdd, maximization, problem_type, dominance, statsMultiObj);
+        pareto_frontier = BDDMultiObj::pareto_frontier_dynamic_layer_cutset(bdd, maximization, problem_type, dominance, statsMultiObj, cpu_threads);
     }
     else
     {

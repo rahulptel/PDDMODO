@@ -36,7 +36,7 @@ struct MultiObjectiveStats {
 //
 struct BDDMultiObj {
     // Find pareto frontier from top-down approach
-	static ParetoFrontier* pareto_frontier_topdown(BDD* bdd, bool maximization=true, const int problem_type=-1, const int dominance_strategy=0, MultiObjectiveStats* stats = NULL);
+	static ParetoFrontier* pareto_frontier_topdown(BDD* bdd, bool maximization=true, const int problem_type=-1, const int dominance_strategy=0, MultiObjectiveStats* stats = NULL, int cpu_threads = 1);
 
     // Find pareto frontier from top-down approach / CUDA
     // kernel_version:
@@ -55,10 +55,10 @@ struct BDDMultiObj {
     static void filter_dominance_knapsack_cuda(BDD* bdd, const int layer, MultiObjectiveStats* stats);
 
     // Find pareto frontier from bottom-up approach
-	static ParetoFrontier* pareto_frontier_bottomup(BDD* bdd, bool maximization=true, const int problem_type=-1, const int dominance_strategy=0, MultiObjectiveStats* stats = NULL);
+	static ParetoFrontier* pareto_frontier_bottomup(BDD* bdd, bool maximization=true, const int problem_type=-1, const int dominance_strategy=0, MultiObjectiveStats* stats = NULL, int cpu_threads = 1);
 
     // Find pareto frontier using dynamic layer cutset
-    static ParetoFrontier* pareto_frontier_dynamic_layer_cutset(BDD* bdd, bool maximization=true, const int problem_type=-1, const int dominance_strategy=0, MultiObjectiveStats* stats = NULL);
+    static ParetoFrontier* pareto_frontier_dynamic_layer_cutset(BDD* bdd, bool maximization=true, const int problem_type=-1, const int dominance_strategy=0, MultiObjectiveStats* stats = NULL, int cpu_threads = 1);
 
     // Approximate pareto frontier / top-down
     static void approximate_pareto_frontier_topdown(BDD* bdd, const int s_max, const int t_max);
@@ -88,10 +88,10 @@ struct BDDMultiObj {
     static void filter_completion(BDD* bdd, const int layer);    
 
     // Find pareto frontier from top-down approach - MDD version
-	static ParetoFrontier* pareto_frontier_topdown(MDD* bdd, MultiObjectiveStats* stats);
+	static ParetoFrontier* pareto_frontier_topdown(MDD* bdd, MultiObjectiveStats* stats, int cpu_threads = 1);
 
     // Find pareto frontier using dynamic layer cutset
-    static ParetoFrontier* pareto_frontier_dynamic_layer_cutset(MDD* mdd, MultiObjectiveStats* stats);
+    static ParetoFrontier* pareto_frontier_dynamic_layer_cutset(MDD* mdd, MultiObjectiveStats* stats, int cpu_threads = 1);
 
     // Find pareto frontier using dynamic layer cutset / CUDA
     static ParetoFrontier* pareto_frontier_dynamic_layer_cutset_cuda(MDD* mdd, MultiObjectiveStats* stats = NULL, std::string* reason = NULL, int kernel_version = 3);
