@@ -67,6 +67,14 @@ Frontier saving options:
 - If both are passed, `--frontier-out <path>` is used.
 - Optional arguments can be provided in any order.
 
+Stats saving options:
+- `--save-stats`: write one JSONL record with run statistics.
+- `--stats-out <path>`: write JSONL stats to the explicit path provided.
+- If `--save-stats` is passed without `--stats-out`, the default is `<input_stem>.stats.jsonl`.
+- `--stats-out <path>` implies `--save-stats`.
+- JSONL write mode is overwrite (`trunc`): only the latest run is kept in the target file.
+- If stats writing fails, a warning is printed to `stderr` and the run still succeeds.
+
 Performance logging:
 - `--perf-log`: emit aggregated phase timings and counters to `stderr` (stdout format remains unchanged).
 - Logged wall-clock and CPU-time values are both reported.
@@ -79,6 +87,14 @@ Stdout format (always 3 lines):
   - `compile_wall_s`
   - `enum_wall_s` (excludes final lexicographic sort)
   - `total_wall_s_end_to_end` (includes post-processing such as sort and optional frontier save; measured from run start to stdout reporting)
+
+JSONL schema notes (`--save-stats`):
+- One flat JSON object is written per run.
+- Includes run configuration, frontier size/shape stats, CPU and wall timings, and aggregated CPU phase counters.
+- Key timing semantics:
+  - `enum_wall_s` excludes final lexicographic sort.
+  - `total_wall_s_end_to_end` includes post-processing before stdout reporting.
+  - `total_cpu_s = compile_cpu_s + enum_cpu_s` (same CPU semantics as stdout line 2).
 
 When backend is `gpu`, execution fails fast with a nonzero exit code if CUDA is unavailable or if the selected problem/method combination has no GPU implementation.
 

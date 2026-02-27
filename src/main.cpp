@@ -7,14 +7,14 @@
 #include <cstdlib>
 #include <string>
 #include <cstdio>
-#include <cerrno>
-#include <climits>
 #include <chrono>
 #include <iomanip>
+#include <fstream>
 
 #include "bdd/bdd.hpp"
 #include "bdd/bdd_alg.hpp"
 #include "bdd/bdd_multiobj.hpp"
+#include "util/cli_parser.hpp"
 #include "util/stats.hpp"
 #include "util/util.hpp"
 #include "bdd/pareto_frontier.hpp"
@@ -38,6 +38,46 @@
 
 using namespace std;
 
+struct RunStatsRecord
+{
+    bool is_tsp_branch;
+    bool postprocess_sort_applied;
+    int num_solutions;
+    long original_width;
+    long reduced_width;
+    long original_num_nodes;
+    long reduced_num_nodes;
+    int layer_coupling;
+    int pareto_dominance_filtered;
+    double pareto_dominance_cpu_s;
+    double compile_cpu_s;
+    double enum_cpu_s;
+    double total_cpu_s;
+    double compile_wall_s;
+    double enum_wall_s;
+    double total_wall_s_end_to_end;
+
+    RunStatsRecord()
+        : is_tsp_branch(false),
+          postprocess_sort_applied(true),
+          num_solutions(0),
+          original_width(-1),
+          reduced_width(-1),
+          original_num_nodes(-1),
+          reduced_num_nodes(-1),
+          layer_coupling(0),
+          pareto_dominance_filtered(0),
+          pareto_dominance_cpu_s(0.0),
+          compile_cpu_s(0.0),
+          enum_cpu_s(0.0),
+          total_cpu_s(0.0),
+          compile_wall_s(0.0),
+          enum_wall_s(0.0),
+          total_wall_s_end_to_end(0.0)
+    {
+    }
+};
+
 static string shell_single_quote(const string &value)
 {
     string quoted = "'";
@@ -54,55 +94,6 @@ static string shell_single_quote(const string &value)
     }
     quoted += "'";
     return quoted;
-}
-
-static string derive_default_frontier_path(const string &input_path)
-{
-    string base = input_path;
-    size_t slash_pos = base.find_last_of("/\\");
-    if (slash_pos != string::npos)
-    {
-        base = base.substr(slash_pos + 1);
-    }
-
-    size_t dot_pos = base.find_last_of('.');
-    if (dot_pos != string::npos)
-    {
-        base = base.substr(0, dot_pos);
-    }
-
-    if (base.empty())
-    {
-        base = "frontier";
-    }
-
-    return base + ".frontier.csv.gz";
-}
-
-static bool parse_positive_int(const string &value, int *out_value)
-{
-    if (value.empty())
-    {
-        return false;
-    }
-
-    errno = 0;
-    char *end_ptr = NULL;
-    long parsed = strtol(value.c_str(), &end_ptr, 10);
-    if (errno != 0 || end_ptr == value.c_str() || *end_ptr != '\0')
-    {
-        return false;
-    }
-    if (parsed <= 0 || parsed > INT_MAX)
-    {
-        return false;
-    }
-
-    if (out_value != NULL)
-    {
-        *out_value = static_cast<int>(parsed);
-    }
-    return true;
 }
 
 static bool write_frontier_gzip_csv(const ParetoFrontier *frontier, const int problem_type, const string &out_path, string *error)
@@ -239,359 +230,194 @@ static void print_perf_log(const string &input_path,
     }
 }
 
+static string json_escape(const string &value)
+{
+    string escaped;
+    escaped.reserve(value.size());
+    for (size_t i = 0; i < value.size(); ++i)
+    {
+        const unsigned char c = static_cast<unsigned char>(value[i]);
+        switch (c)
+        {
+        case '\"':
+            escaped += "\\\"";
+            break;
+        case '\\':
+            escaped += "\\\\";
+            break;
+        case '\b':
+            escaped += "\\b";
+            break;
+        case '\f':
+            escaped += "\\f";
+            break;
+        case '\n':
+            escaped += "\\n";
+            break;
+        case '\r':
+            escaped += "\\r";
+            break;
+        case '\t':
+            escaped += "\\t";
+            break;
+        default:
+            if (c < 0x20)
+            {
+                static const char hex[] = "0123456789abcdef";
+                escaped += "\\u00";
+                escaped += hex[(c >> 4) & 0x0F];
+                escaped += hex[c & 0x0F];
+            }
+            else
+            {
+                escaped += static_cast<char>(c);
+            }
+            break;
+        }
+    }
+    return escaped;
+}
+
+static bool write_stats_jsonl(const string &out_path,
+                              const CliOptions &opts,
+                              const MultiObjectiveStats *stats,
+                              const RunStatsRecord &record,
+                              string *error)
+{
+    ofstream out(out_path.c_str(), ios::out | ios::trunc);
+    if (!out.is_open())
+    {
+        if (error != NULL)
+        {
+            *error = "could not open output path";
+        }
+        return false;
+    }
+
+    out << fixed << setprecision(6);
+    bool first = true;
+    auto key_prefix = [&]() {
+        if (!first)
+        {
+            out << ',';
+        }
+        first = false;
+    };
+
+    auto write_string = [&](const string &key, const string &value) {
+        key_prefix();
+        out << "\"" << key << "\":\"" << json_escape(value) << "\"";
+    };
+    auto write_bool = [&](const string &key, const bool value) {
+        key_prefix();
+        out << "\"" << key << "\":" << (value ? "true" : "false");
+    };
+    auto write_int = [&](const string &key, const long long value) {
+        key_prefix();
+        out << "\"" << key << "\":" << value;
+    };
+    auto write_double = [&](const string &key, const double value) {
+        key_prefix();
+        out << "\"" << key << "\":" << value;
+    };
+
+    const double dominance_cpu_s = stats != NULL ? ((double)stats->pareto_dominance_time) / CLOCKS_PER_SEC : 0.0;
+    const int layer_coupling = stats != NULL ? stats->layer_coupling : 0;
+    const int dominance_filtered = stats != NULL ? stats->pareto_dominance_filtered : 0;
+
+    out << '{';
+    write_string("input_path", opts.input_path);
+    write_int("problem_type", opts.problem_type);
+    write_bool("preprocess", opts.preprocess);
+    write_int("method", opts.method);
+    write_int("approx_s", opts.approx_s);
+    write_int("approx_t", opts.approx_t);
+    write_int("dominance", opts.dominance);
+    write_string("backend", backend_to_string(opts.backend));
+    write_int("cpu_threads", opts.cpu_threads);
+    write_int("kernel_version", opts.kernel_version);
+    write_bool("save_frontier", opts.save_frontier);
+    write_string("frontier_out_path", opts.frontier_out_path);
+    write_bool("perf_log", opts.perf_log);
+    write_bool("save_stats", opts.save_stats);
+    write_string("stats_out_path", opts.stats_out_path);
+    write_bool("is_tsp_branch", record.is_tsp_branch);
+    write_bool("postprocess_sort_applied", record.postprocess_sort_applied);
+
+    write_int("num_solutions", record.num_solutions);
+    write_int("original_width", record.original_width);
+    write_int("reduced_width", record.reduced_width);
+    write_int("original_num_nodes", record.original_num_nodes);
+    write_int("reduced_num_nodes", record.reduced_num_nodes);
+    write_int("layer_coupling", stats != NULL ? layer_coupling : record.layer_coupling);
+    write_int("pareto_dominance_filtered", stats != NULL ? dominance_filtered : record.pareto_dominance_filtered);
+
+    write_double("compile_cpu_s", record.compile_cpu_s);
+    write_double("enum_cpu_s", record.enum_cpu_s);
+    write_double("total_cpu_s", record.total_cpu_s);
+    write_double("compile_wall_s", record.compile_wall_s);
+    write_double("enum_wall_s", record.enum_wall_s);
+    write_double("total_wall_s_end_to_end", record.total_wall_s_end_to_end);
+    write_double("pareto_dominance_cpu_s", stats != NULL ? dominance_cpu_s : record.pareto_dominance_cpu_s);
+
+    write_double("cpu_expand_td_wall_s", stats != NULL ? stats->cpu_expand_td_wall_s : 0.0);
+    write_double("cpu_expand_bu_wall_s", stats != NULL ? stats->cpu_expand_bu_wall_s : 0.0);
+    write_double("cpu_recompute_td_wall_s", stats != NULL ? stats->cpu_recompute_td_wall_s : 0.0);
+    write_double("cpu_recompute_bu_wall_s", stats != NULL ? stats->cpu_recompute_bu_wall_s : 0.0);
+    write_double("cpu_dominance_wall_s", stats != NULL ? stats->cpu_dominance_wall_s : 0.0);
+    write_double("cpu_cutset_sort_wall_s", stats != NULL ? stats->cpu_cutset_sort_wall_s : 0.0);
+    write_double("cpu_cutset_convolution_wall_s", stats != NULL ? stats->cpu_cutset_convolution_wall_s : 0.0);
+    write_double("cpu_cutset_partial_merge_wall_s", stats != NULL ? stats->cpu_cutset_partial_merge_wall_s : 0.0);
+    write_int("cpu_layers_td", stats != NULL ? stats->cpu_layers_td : 0);
+    write_int("cpu_layers_bu", stats != NULL ? stats->cpu_layers_bu : 0);
+    write_int("cpu_nodes_expanded", stats != NULL ? stats->cpu_nodes_expanded : 0);
+    write_int("cpu_cutset_size", stats != NULL ? stats->cpu_cutset_size : 0);
+    out << "}\n";
+
+    if (!out.good())
+    {
+        if (error != NULL)
+        {
+            *error = "failed while writing JSONL output";
+        }
+        return false;
+    }
+    return true;
+}
+
 //
 // Main function
 //
 int main(int argc, char *argv[])
 {
-    enum Backend
+    CliOptions options;
+    string parse_error;
+    if (!parse_cli_args(argc, argv, &options, &parse_error))
     {
-        BACKEND_CPU = 0,
-        BACKEND_GPU = 1
-    };
-
-    auto print_usage = []()
-    {
-        cout << '\n';
-        cout << "Usage: multiobj_nobjs<NUM_OBJS> [input file] [problem type] [preprocess?] [method] [appr-S] [appr-T] [dominance] [options]\n";
-
-        cout << "\n\twhere:";
-
-        cout << "\n";
-        cout << "\t\tproblem_type = 1: knapsack\n";
-        cout << "\t\tproblem_type = 2: set packing\n";
-        cout << "\t\tproblem_type = 3: set covering\n";
-        cout << "\t\tproblem_type = 4: TSP\n";
-
-        cout << "\n";
-        cout << "\t\tpreprocess = 0: do not preprocess instance\n";
-        cout << "\t\tpreprocess = 1: preprocess input to minimize BDD size\n";
-
-        cout << "\n";
-        cout << "\t\tmethod = 1: top-down BFS\n";
-        cout << "\t\tmethod = 2: bottom-up BFS\n";
-        cout << "\t\tmethod = 3: dynamic layer cutset\n";
-
-        cout << "\n";
-        cout << "\t\tapprox = n m: approximate n-sized S set and m-sized T set (n=0 if disabled)\n";
-
-        cout << "\n";
-        cout << "\t\tdominance = 0:  disable state dominance\n";
-        cout << "\t\tdominance = 1:  state dominance strategy 1\n";
-
-        cout << "\n";
-        cout << "\t\tNamed backend options:\n";
-        cout << "\t\t\t--backend cpu|gpu\n";
-        cout << "\t\t\t--cpu-threads <N>   (cpu only)\n";
-        cout << "\t\t\t--kernel <K>        (gpu only, K in {1,2,3})\n";
-        cout << "\t\tShorthand backend options:\n";
-        cout << "\t\t\tcpu [N]\n";
-        cout << "\t\t\tgpu [K]\n";
-        cout << "\t\tbackend omitted defaults to cpu\n";
-        cout << "\t\tcpu threads default to OMP_NUM_THREADS if valid, otherwise 1\n";
-
-        cout << "\n";
-        cout << "\t\tkernel = 1: one block per node\n";
-        cout << "\t\tkernel = 2: fixed number of blocks per node (2D grid)\n";
-        cout << "\t\tkernel = 3: dynamic blocks per node with binary-search destination lookup (1D grid)\n";
-        cout << "\t\tkernel omitted with backend=gpu: defaults by problem type\n";
-        cout << "\t\t\tproblem_type=1 (knapsack): 1\n";
-        cout << "\t\t\tproblem_type=2 (set packing): 2\n";
-        cout << "\t\t\tproblem_type=3 (set covering): 1\n";
-        cout << "\t\t\tproblem_type=4 (TSP): 3\n";
-
-        cout << "\n";
-        cout << "\t\t--save-frontier: save Pareto frontier to <input_stem>.frontier.csv.gz\n";
-        cout << "\t\t--frontier-out <path>: save Pareto frontier to explicit gzip CSV path\n";
-        cout << "\t\t--perf-log: print aggregated CPU performance diagnostics to stderr\n";
-        cout << "\t\toptional arguments can be provided in any order\n";
-
-        cout << endl;
-    };
-
-    if (argc < 8)
-    {
+        if (!parse_error.empty())
+        {
+            cout << parse_error << endl;
+        }
         print_usage();
         exit(1);
     }
 
-    // Read input
-    int problem_type = atoi(argv[2]);
-    bool preprocess = (argv[3][0] == '1');
-    int method = atoi(argv[4]);
+    const string input_path = options.input_path;
+    const int problem_type = options.problem_type;
+    const bool preprocess = options.preprocess;
+    const int method = options.method;
     bool maximization = true;
-    int approx_S = atoi(argv[5]);
-    int approx_T = atoi(argv[6]);
-    int dominance = atoi(argv[7]);
-
-    Backend backend = BACKEND_CPU;
-    bool backend_set = false;
-    bool backend_from_named = false;
-    bool backend_from_shorthand = false;
-    int kernel_version = -1;
-    bool kernel_version_set = false;
-    int cpu_threads = 1;
-    bool cpu_threads_set = false;
-
-    bool save_frontier = false;
-    string frontier_out_path;
-    bool perf_log = false;
-
-    for (int i = 8; i < argc; ++i)
-    {
-        string token(argv[i]);
-        if (token == "--backend")
-        {
-            if (backend_from_shorthand)
-            {
-                cout << "Error - cannot mix --backend with shorthand backend token." << endl;
-                print_usage();
-                exit(1);
-            }
-            if (backend_set)
-            {
-                cout << "Error - backend provided multiple times." << endl;
-                print_usage();
-                exit(1);
-            }
-            if (i + 1 >= argc)
-            {
-                cout << "Error - --backend requires a value (cpu or gpu)." << endl;
-                print_usage();
-                exit(1);
-            }
-            string backend_token(argv[++i]);
-            if (backend_token == "cpu")
-            {
-                backend = BACKEND_CPU;
-            }
-            else if (backend_token == "gpu")
-            {
-                backend = BACKEND_GPU;
-            }
-            else if (backend_token == "cuda")
-            {
-                cout << "Error - backend token 'cuda' is unsupported; use 'gpu'." << endl;
-                exit(1);
-            }
-            else
-            {
-                cout << "Error - invalid backend '" << backend_token << "'. Use cpu or gpu." << endl;
-                print_usage();
-                exit(1);
-            }
-            backend_set = true;
-            backend_from_named = true;
-        }
-        else if (token == "--cpu-threads")
-        {
-            if (cpu_threads_set)
-            {
-                cout << "Error - cpu thread count provided multiple times." << endl;
-                print_usage();
-                exit(1);
-            }
-            if (i + 1 >= argc)
-            {
-                cout << "Error - --cpu-threads requires a positive integer." << endl;
-                print_usage();
-                exit(1);
-            }
-            string value(argv[++i]);
-            if (!parse_positive_int(value, &cpu_threads))
-            {
-                cout << "Error - invalid --cpu-threads value '" << value << "' (expected positive integer)." << endl;
-                exit(1);
-            }
-            cpu_threads_set = true;
-        }
-        else if (token == "--kernel")
-        {
-            if (kernel_version_set)
-            {
-                cout << "Error - kernel provided multiple times." << endl;
-                print_usage();
-                exit(1);
-            }
-            if (i + 1 >= argc)
-            {
-                cout << "Error - --kernel requires a value in {1,2,3}." << endl;
-                print_usage();
-                exit(1);
-            }
-            string value(argv[++i]);
-            if (!parse_positive_int(value, &kernel_version) || kernel_version < 1 || kernel_version > 3)
-            {
-                cout << "Error - invalid --kernel value '" << value << "' (expected 1, 2, or 3)." << endl;
-                exit(1);
-            }
-            kernel_version_set = true;
-        }
-        else if (token == "cpu" || token == "gpu")
-        {
-            if (backend_from_named)
-            {
-                cout << "Error - cannot mix shorthand backend token with --backend." << endl;
-                print_usage();
-                exit(1);
-            }
-            if (backend_set)
-            {
-                cout << "Error - backend provided multiple times." << endl;
-                print_usage();
-                exit(1);
-            }
-
-            backend = (token == "cpu" ? BACKEND_CPU : BACKEND_GPU);
-            backend_set = true;
-            backend_from_shorthand = true;
-
-            if (i + 1 < argc)
-            {
-                string next_token(argv[i + 1]);
-                errno = 0;
-                char *end_ptr = NULL;
-                long parsed_raw = strtol(next_token.c_str(), &end_ptr, 10);
-                const bool next_is_integer = (errno == 0 && end_ptr != next_token.c_str() && *end_ptr == '\0');
-                if (next_is_integer)
-                {
-                    if (token == "cpu")
-                    {
-                        if (cpu_threads_set)
-                        {
-                            cout << "Error - cpu threads provided multiple times." << endl;
-                            print_usage();
-                            exit(1);
-                        }
-                        if (parsed_raw <= 0 || parsed_raw > INT_MAX)
-                        {
-                            cout << "Error - invalid cpu shorthand thread count '" << next_token << "' (expected positive integer)." << endl;
-                            exit(1);
-                        }
-                        cpu_threads = static_cast<int>(parsed_raw);
-                        cpu_threads_set = true;
-                    }
-                    else
-                    {
-                        if (kernel_version_set)
-                        {
-                            cout << "Error - kernel provided multiple times." << endl;
-                            print_usage();
-                            exit(1);
-                        }
-                        if (parsed_raw < 1 || parsed_raw > 3)
-                        {
-                            cout << "Error - invalid gpu shorthand kernel '" << next_token << "' (expected 1, 2, or 3)." << endl;
-                            exit(1);
-                        }
-                        kernel_version = static_cast<int>(parsed_raw);
-                        kernel_version_set = true;
-                    }
-                    ++i;
-                }
-            }
-        }
-        else if (token == "cuda")
-        {
-            cout << "Error - backend token 'cuda' is unsupported; use 'gpu'." << endl;
-            exit(1);
-        }
-        else if (token == "--save-frontier")
-        {
-            save_frontier = true;
-        }
-        else if (token == "--frontier-out")
-        {
-            if (i + 1 >= argc)
-            {
-                cout << "Error - --frontier-out requires a file path." << endl;
-                print_usage();
-                exit(1);
-            }
-            frontier_out_path = argv[++i];
-            if (frontier_out_path.empty())
-            {
-                cout << "Error - --frontier-out path cannot be empty." << endl;
-                exit(1);
-            }
-            save_frontier = true;
-        }
-        else if (token == "--perf-log")
-        {
-            perf_log = true;
-        }
-        else
-        {
-            int parsed_numeric = 0;
-            if (parse_positive_int(token, &parsed_numeric))
-            {
-                cout << "Error - positional numeric argument '" << token << "' must immediately follow shorthand backend token cpu|gpu." << endl;
-            }
-            else
-            {
-                cout << "Error - unrecognized optional argument '" << token << "'." << endl;
-            }
-            print_usage();
-            exit(1);
-        }
-    }
-
-    if (save_frontier && frontier_out_path.empty())
-    {
-        frontier_out_path = derive_default_frontier_path(argv[1]);
-    }
-
-    if (backend == BACKEND_GPU && cpu_threads_set)
-    {
-        cout << "Error - cpu thread options are not valid with backend=gpu." << endl;
-        exit(1);
-    }
-
-    if (backend == BACKEND_CPU && kernel_version_set)
-    {
-        cout << "Error - --kernel is only valid with backend=gpu." << endl;
-        exit(1);
-    }
-
-    if (backend == BACKEND_GPU && !kernel_version_set)
-    {
-        if (problem_type == 1 || problem_type == 3)
-        {
-            kernel_version = 1;
-        }
-        else if (problem_type == 2)
-        {
-            kernel_version = 2;
-        }
-        else if (problem_type == 4)
-        {
-            kernel_version = 3;
-        }
-        else
-        {
-            cout << "Error - problem type not recognized" << endl;
-            exit(1);
-        }
-    }
-    else if (backend == BACKEND_CPU && !cpu_threads_set)
-    {
-        const char *env_threads = getenv("OMP_NUM_THREADS");
-        int parsed_env_threads = 0;
-        if (env_threads != NULL && parse_positive_int(string(env_threads), &parsed_env_threads))
-        {
-            cpu_threads = parsed_env_threads;
-        }
-        else
-        {
-            cpu_threads = 1;
-        }
-    }
-
-    if (backend == BACKEND_GPU && method != 1 && method != 3)
-    {
-        cout << "Error - GPU backend is unsupported for method " << method << "." << endl;
-        exit(1);
-    }
+    const int approx_S = options.approx_s;
+    const int approx_T = options.approx_t;
+    const int dominance = options.dominance;
+    const Backend backend = options.backend;
+    const int kernel_version = options.kernel_version;
+    const int cpu_threads = options.cpu_threads;
+    const bool save_frontier = options.save_frontier;
+    const string frontier_out_path = options.frontier_out_path;
+    const bool perf_log = options.perf_log;
+    const bool save_stats = options.save_stats;
+    const string stats_out_path = options.stats_out_path;
 
     typedef std::chrono::steady_clock WallClock;
     const WallClock::time_point run_wall_begin = WallClock::now();
@@ -620,7 +446,7 @@ int main(int argc, char *argv[])
 
         // Read instance
         KnapsackInstance inst;
-        inst.read(argv[1]);
+        inst.read(const_cast<char *>(input_path.c_str()));
 
         // if (preprocess) {
         //     // Reorder variables
@@ -677,7 +503,7 @@ int main(int argc, char *argv[])
     {
 
         // read instance
-        SetPackingInstance setpack(argv[1]);
+        SetPackingInstance setpack(input_path.c_str());
 
         // create associated independent set instance
         IndepSetInst *inst = setpack.create_indepset_instance();
@@ -700,7 +526,7 @@ int main(int argc, char *argv[])
         maximization = false;
 
         // read instance
-        SetCoveringInstance setcover(argv[1]);
+        SetCoveringInstance setcover(input_path.c_str());
 
         // preprocess
         if (preprocess)
@@ -727,7 +553,7 @@ int main(int argc, char *argv[])
     {
         // Read instance
         TSPInstance inst;
-        inst.read(argv[1]);
+        inst.read(input_path.c_str());
 
         // Construct MDD
         const WallClock::time_point compilation_tsp_wall_begin = WallClock::now();
@@ -745,7 +571,7 @@ int main(int argc, char *argv[])
         clock_t pareto_tsp_cpu = clock();
 
         MultiObjectiveStats *statsMultiObj = new MultiObjectiveStats;
-        statsMultiObj->cpu_perf_enabled = (perf_log && backend == BACKEND_CPU);
+        statsMultiObj->cpu_perf_enabled = (backend == BACKEND_CPU) && (perf_log || save_stats);
         ParetoFrontier *pareto_frontier = NULL;
 
         if (method == 1) { // Top-down
@@ -802,6 +628,24 @@ int main(int argc, char *argv[])
         const double total_wall_s_end_to_end =
             std::chrono::duration_cast<std::chrono::duration<double> >(WallClock::now() - run_wall_begin).count();
 
+        RunStatsRecord stats_record;
+        stats_record.is_tsp_branch = true;
+        stats_record.postprocess_sort_applied = true;
+        stats_record.num_solutions = pareto_frontier->get_num_sols();
+        stats_record.original_width = -1;
+        stats_record.reduced_width = -1;
+        stats_record.original_num_nodes = -1;
+        stats_record.reduced_num_nodes = -1;
+        stats_record.layer_coupling = statsMultiObj->layer_coupling;
+        stats_record.pareto_dominance_filtered = statsMultiObj->pareto_dominance_filtered;
+        stats_record.pareto_dominance_cpu_s = ((double)statsMultiObj->pareto_dominance_time) / CLOCKS_PER_SEC;
+        stats_record.compile_cpu_s = ((double)compilation_tsp) / CLOCKS_PER_SEC;
+        stats_record.enum_cpu_s = ((double)pareto_tsp_cpu) / CLOCKS_PER_SEC;
+        stats_record.total_cpu_s = stats_record.compile_cpu_s + stats_record.enum_cpu_s;
+        stats_record.compile_wall_s = compilation_wall_s;
+        stats_record.enum_wall_s = pareto_enum_wall_s;
+        stats_record.total_wall_s_end_to_end = total_wall_s_end_to_end;
+
         cout << pareto_frontier->get_num_sols() << endl;
         cout << (double)(compilation_tsp + pareto_tsp_cpu) / CLOCKS_PER_SEC << endl;
         cout << (double)compilation_tsp / CLOCKS_PER_SEC;
@@ -814,8 +658,8 @@ int main(int argc, char *argv[])
         if (perf_log)
         {
             const double total_wall_s = total_wall_s_end_to_end;
-            const string backend_name = (backend == BACKEND_GPU ? "gpu" : "cpu");
-            print_perf_log(argv[1],
+            const string backend_name = backend_to_string(backend);
+            print_perf_log(input_path,
                            problem_type,
                            method,
                            backend_name,
@@ -827,6 +671,20 @@ int main(int argc, char *argv[])
                            ((double)compilation_tsp) / CLOCKS_PER_SEC,
                            ((double)pareto_tsp_cpu) / CLOCKS_PER_SEC,
                            true);
+        }
+
+        if (save_stats)
+        {
+            string stats_error;
+            if (!write_stats_jsonl(stats_out_path, options, statsMultiObj, stats_record, &stats_error))
+            {
+                cerr << "Warning - failed to save stats to '" << stats_out_path << "'";
+                if (!stats_error.empty())
+                {
+                    cerr << ": " << stats_error;
+                }
+                cerr << '\n';
+            }
         }
 
         return 0;
@@ -849,7 +707,7 @@ int main(int argc, char *argv[])
 
     // Initialize multiobjective stats
     MultiObjectiveStats *statsMultiObj = new MultiObjectiveStats;
-    statsMultiObj->cpu_perf_enabled = (perf_log && backend == BACKEND_CPU);
+    statsMultiObj->cpu_perf_enabled = (backend == BACKEND_CPU) && (perf_log || save_stats);
 
     // Compute pareto frontier based on methodology
     // cout << "\n\nComputing pareto frontier..." << endl;
@@ -969,6 +827,24 @@ int main(int argc, char *argv[])
     const double total_wall_s_end_to_end =
         std::chrono::duration_cast<std::chrono::duration<double> >(WallClock::now() - run_wall_begin).count();
 
+    RunStatsRecord stats_record;
+    stats_record.is_tsp_branch = false;
+    stats_record.postprocess_sort_applied = true;
+    stats_record.num_solutions = pareto_frontier->get_num_sols();
+    stats_record.original_width = original_width;
+    stats_record.reduced_width = reduced_width;
+    stats_record.original_num_nodes = original_num_nodes;
+    stats_record.reduced_num_nodes = reduced_num_nodes;
+    stats_record.layer_coupling = statsMultiObj->layer_coupling;
+    stats_record.pareto_dominance_filtered = statsMultiObj->pareto_dominance_filtered;
+    stats_record.pareto_dominance_cpu_s = ((double)statsMultiObj->pareto_dominance_time) / CLOCKS_PER_SEC;
+    stats_record.compile_cpu_s = timers.get_time(bdd_compilation_time);
+    stats_record.enum_cpu_s = timers.get_time(pareto_time);
+    stats_record.total_cpu_s = stats_record.compile_cpu_s + stats_record.enum_cpu_s;
+    stats_record.compile_wall_s = compilation_wall_s;
+    stats_record.enum_wall_s = pareto_enum_wall_s;
+    stats_record.total_wall_s_end_to_end = total_wall_s_end_to_end;
+
     cout << pareto_frontier->get_num_sols() << endl;
     cout << (timers.get_time(bdd_compilation_time) + timers.get_time(pareto_time)) << endl;
 
@@ -991,8 +867,8 @@ int main(int argc, char *argv[])
     if (perf_log)
     {
         const double total_wall_s = total_wall_s_end_to_end;
-        const string backend_name = (backend == BACKEND_GPU ? "gpu" : "cpu");
-        print_perf_log(argv[1],
+        const string backend_name = backend_to_string(backend);
+        print_perf_log(input_path,
                        problem_type,
                        method,
                        backend_name,
@@ -1004,6 +880,20 @@ int main(int argc, char *argv[])
                        timers.get_time(bdd_compilation_time),
                        timers.get_time(pareto_time),
                        true);
+    }
+
+    if (save_stats)
+    {
+        string stats_error;
+        if (!write_stats_jsonl(stats_out_path, options, statsMultiObj, stats_record, &stats_error))
+        {
+            cerr << "Warning - failed to save stats to '" << stats_out_path << "'";
+            if (!stats_error.empty())
+            {
+                cerr << ": " << stats_error;
+            }
+            cerr << '\n';
+        }
     }
 
     return 0;
