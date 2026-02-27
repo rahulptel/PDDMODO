@@ -99,14 +99,19 @@ __global__ void compute_edge_counts_kernel(const int* edge_src,
 __global__ void compute_dst_candidate_counts_kernel(const int* in_edge_offsets,
                                                     const int* edge_offsets,
                                                     int next_nodes,
-                                                    int* dst_counts) {
+                                                    int* dst_counts,
+                                                    int* dst_blocks) {
     const int dst = blockIdx.x * blockDim.x + threadIdx.x;
     if (dst >= next_nodes) {
         return;
     }
     const int edge_begin = in_edge_offsets[dst];
     const int edge_end = in_edge_offsets[dst + 1];
-    dst_counts[dst] = edge_offsets[edge_end] - edge_offsets[edge_begin];
+    const int count = edge_offsets[edge_end] - edge_offsets[edge_begin];
+    dst_counts[dst] = count;
+    if (dst_blocks != NULL) {
+        dst_blocks[dst] = (count + kThreadsPerBlock - 1) / kThreadsPerBlock;
+    }
 }
 
 __global__ void expand_candidates_points_kernel(const int* edge_src,
@@ -211,6 +216,110 @@ __global__ void mark_dominated_by_dst_tiled_kernel(const ObjType* points,
                 }
                 if (ge_all && (strict || (local_j < local_i))) {
                     dominated = true;
+                }
+            }
+        }
+        __syncthreads();
+    }
+
+    const int keep = (valid_i && !dominated) ? 1 : 0;
+    if (valid_i) {
+        alive[i] = keep;
+    }
+
+    __shared__ int live_sh[kThreadsPerBlock];
+    live_sh[threadIdx.x] = keep;
+    __syncthreads();
+    for (int offset = blockDim.x / 2; offset > 0; offset >>= 1) {
+        if (threadIdx.x < offset) {
+            live_sh[threadIdx.x] += live_sh[threadIdx.x + offset];
+        }
+        __syncthreads();
+    }
+    if (threadIdx.x == 0) {
+        atomicAdd(&next_sizes[dst], live_sh[0]);
+    }
+}
+
+__device__ int find_dst_node(int block_idx, const int* block_offsets, int next_nodes) {
+    int low = 0;
+    int high = next_nodes;
+    while (low < high) {
+        const int mid = low + (high - low) / 2;
+        if (block_idx < block_offsets[mid + 1]) {
+            high = mid;
+        } else {
+            low = mid + 1;
+        }
+    }
+    return low;
+}
+
+__global__ void mark_dominated_by_dst_dynamic_1d_kernel(const ObjType* points,
+                                                        const int* in_edge_offsets,
+                                                        const int* edge_offsets,
+                                                        const int* block_offsets,
+                                                        int next_nodes,
+                                                        int* alive,
+                                                        int* next_sizes) {
+    const int block_idx = blockIdx.x;
+    const int dst = find_dst_node(block_idx, block_offsets, next_nodes);
+    if (dst >= next_nodes) {
+        return;
+    }
+
+    const int tile_i = block_idx - block_offsets[dst];
+    const int edge_begin = in_edge_offsets[dst];
+    const int edge_end = in_edge_offsets[dst + 1];
+    const int begin = edge_offsets[edge_begin];
+    const int end = edge_offsets[edge_end];
+    const int len = end - begin;
+
+    const int local_i = tile_i * blockDim.x + threadIdx.x;
+    const bool valid_i = (local_i < len);
+    const int i = begin + local_i;
+
+    ObjType point_i[NOBJS];
+    if (valid_i) {
+        #pragma unroll
+        for (int o = 0; o < NOBJS; ++o) {
+            point_i[o] = points[i * NOBJS + o];
+        }
+    }
+
+    bool dominated = false;
+    __shared__ ObjType sh_points[kThreadsPerBlock * NOBJS];
+    for (int j_base = 0; j_base < len; j_base += blockDim.x) {
+        const int j_local = j_base + threadIdx.x;
+        if (j_local < len) {
+            const int j = begin + j_local;
+            #pragma unroll
+            for (int o = 0; o < NOBJS; ++o) {
+                sh_points[threadIdx.x * NOBJS + o] = points[j * NOBJS + o];
+            }
+        }
+        __syncthreads();
+
+        if (valid_i && !dominated) {
+            const int tile_count = min(len - j_base, static_cast<int>(blockDim.x));
+            for (int jj = 0; jj < tile_count; ++jj) {
+                const int local_j = j_base + jj;
+                if (local_j == local_i) {
+                    continue;
+                }
+
+                bool ge_all = true;
+                bool strict = false;
+                #pragma unroll
+                for (int o = 0; o < NOBJS; ++o) {
+                    const ObjType a = sh_points[jj * NOBJS + o];
+                    const ObjType b = point_i[o];
+                    ge_all = ge_all && (a >= b);
+                    strict = strict || (a > b);
+                }
+                if (ge_all && (strict || (local_j < local_i))) {
+                    dominated = true;
+                    break;
                 }
             }
         }
@@ -605,7 +714,11 @@ ParetoFrontier* topdown_cuda_enumerate(BDD* bdd,
                                        const int dominance_strategy,
                                        MultiObjectiveStats* stats,
                                        std::string* reason,
-                                       int gpu_version) {
+                                       int kernel_version) {
+    if (kernel_version < 1 || kernel_version > 3) {
+        set_reason(reason, "Invalid kernel_version (expected 1, 2, or 3)");
+        return NULL;
+    }
     if (bdd == NULL) {
         set_reason(reason, "BDD pointer is NULL");
         return NULL;
@@ -777,13 +890,28 @@ ParetoFrontier* topdown_cuda_enumerate(BDD* bdd,
 
                 thrust::device_vector<int> d_alive(total_candidates, 0);
                 thrust::device_vector<int> d_cand_counts(next_nodes, 0);
-                compute_dst_candidate_counts_kernel<<<ceil_div(next_nodes, kThreadsPerBlock), kThreadsPerBlock>>>(
-                    thrust::raw_pointer_cast(packed.in_edge_offsets.data()),
-                    thrust::raw_pointer_cast(d_edge_offsets.data()),
-                    next_nodes,
-                    thrust::raw_pointer_cast(d_cand_counts.data()));
-                if (!sync_kernel("compute_dst_candidate_counts_kernel", reason)) {
-                    return NULL;
+                thrust::device_vector<int> d_dst_blocks;
+                if (kernel_version == 3) {
+                    d_dst_blocks.assign(next_nodes, 0);
+                    compute_dst_candidate_counts_kernel<<<ceil_div(next_nodes, kThreadsPerBlock), kThreadsPerBlock>>>(
+                        thrust::raw_pointer_cast(packed.in_edge_offsets.data()),
+                        thrust::raw_pointer_cast(d_edge_offsets.data()),
+                        next_nodes,
+                        thrust::raw_pointer_cast(d_cand_counts.data()),
+                        thrust::raw_pointer_cast(d_dst_blocks.data()));
+                    if (!sync_kernel("compute_dst_candidate_counts_kernel_v3", reason)) {
+                        return NULL;
+                    }
+                } else {
+                    compute_dst_candidate_counts_kernel<<<ceil_div(next_nodes, kThreadsPerBlock), kThreadsPerBlock>>>(
+                        thrust::raw_pointer_cast(packed.in_edge_offsets.data()),
+                        thrust::raw_pointer_cast(d_edge_offsets.data()),
+                        next_nodes,
+                        thrust::raw_pointer_cast(d_cand_counts.data()),
+                        NULL);
+                    if (!sync_kernel("compute_dst_candidate_counts_kernel", reason)) {
+                        return NULL;
+                    }
                 }
 
                 const int max_seg_size = thrust::reduce(d_cand_counts.begin(),
@@ -791,7 +919,18 @@ ParetoFrontier* topdown_cuda_enumerate(BDD* bdd,
                                                         0,
                                                         thrust::maximum<int>());
                 if (max_seg_size > 0) {
-                    if (problem_type == 2 && max_seg_size > kThreadsPerBlock) {
+                    if (kernel_version == 1) {
+                        mark_dominated_by_dst_single_block_kernel<<<next_nodes, kThreadsPerBlock>>>(
+                            thrust::raw_pointer_cast(d_cand_points.data()),
+                            thrust::raw_pointer_cast(packed.in_edge_offsets.data()),
+                            thrust::raw_pointer_cast(d_edge_offsets.data()),
+                            next_nodes,
+                            thrust::raw_pointer_cast(d_alive.data()),
+                            thrust::raw_pointer_cast(d_next_sizes.data()));
+                        if (!sync_kernel("mark_dominated_by_dst_single_block_kernel", reason)) {
+                            return NULL;
+                        }
+                    } else if (kernel_version == 2) {
                         const int num_tiles = ceil_div(max_seg_size, kThreadsPerBlock);
                         dim3 grid(next_nodes, num_tiles);
                         mark_dominated_by_dst_tiled_kernel<<<grid, kThreadsPerBlock>>>(
@@ -804,17 +943,27 @@ ParetoFrontier* topdown_cuda_enumerate(BDD* bdd,
                         if (!sync_kernel("mark_dominated_by_dst_tiled_kernel", reason)) {
                             return NULL;
                         }
-                    } else {
-                        mark_dominated_by_dst_single_block_kernel<<<next_nodes, kThreadsPerBlock>>>(
-                            thrust::raw_pointer_cast(d_cand_points.data()),
-                            thrust::raw_pointer_cast(packed.in_edge_offsets.data()),
-                            thrust::raw_pointer_cast(d_edge_offsets.data()),
-                            next_nodes,
-                            thrust::raw_pointer_cast(d_alive.data()),
-                            thrust::raw_pointer_cast(d_next_sizes.data()));
-                        if (!sync_kernel("mark_dominated_by_dst_single_block_kernel", reason)) {
-                            return NULL;
+                    } else if (kernel_version == 3) {
+                        thrust::device_vector<int> d_block_offsets(next_nodes + 1, 0);
+                        thrust::exclusive_scan(d_dst_blocks.begin(), d_dst_blocks.end(), d_block_offsets.begin());
+                        d_block_offsets[next_nodes] = thrust::reduce(d_dst_blocks.begin(), d_dst_blocks.end(), 0);
+                        const int total_blocks = d_block_offsets[next_nodes];
+                        if (total_blocks > 0) {
+                            mark_dominated_by_dst_dynamic_1d_kernel<<<total_blocks, kThreadsPerBlock>>>(
+                                thrust::raw_pointer_cast(d_cand_points.data()),
+                                thrust::raw_pointer_cast(packed.in_edge_offsets.data()),
+                                thrust::raw_pointer_cast(d_edge_offsets.data()),
+                                thrust::raw_pointer_cast(d_block_offsets.data()),
+                                next_nodes,
+                                thrust::raw_pointer_cast(d_alive.data()),
+                                thrust::raw_pointer_cast(d_next_sizes.data()));
+                            if (!sync_kernel("mark_dominated_by_dst_dynamic_1d_kernel", reason)) {
+                                return NULL;
+                            }
                         }
+                    } else {
+                        set_reason(reason, "Invalid kernel_version (expected 1, 2, or 3)");
+                        return NULL;
                     }
                 }
 
@@ -902,7 +1051,7 @@ ParetoFrontier* topdown_cuda_enumerate(BDD* bdd,
 ParetoFrontier* topdown_mdd_cuda_enumerate(MDD* mdd,
                                            MultiObjectiveStats* stats,
                                            std::string* reason,
-                                           int gpu_version) {
+                                           int kernel_version) {
     using std::cout;
     using std::endl;
 
@@ -975,7 +1124,7 @@ ParetoFrontier* topdown_mdd_cuda_enumerate(MDD* mdd,
                     packed[l].td_num_edges,
                     nn,
                     d_td_offsets, d_td_points,
-                    d_ns, d_no, d_np, reason, gpu_version)) {
+                    d_ns, d_no, d_np, reason, kernel_version)) {
             return NULL;
         }
         t1 = clock();

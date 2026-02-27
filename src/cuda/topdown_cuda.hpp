@@ -19,20 +19,25 @@ bool topdown_cuda_available(std::string* reason);
 
 // Runs top-down frontier enumeration on CUDA for BDDs.
 // Returns NULL on failure and fills reason when provided.
+// kernel_version:
+//   1 = one block per node
+//   2 = fixed number of blocks per node (2D grid)
+//   3 = dynamic number of blocks per node (1D grid + binary-search destination lookup)
 ParetoFrontier* topdown_cuda_enumerate(BDD* bdd,
                                        bool maximization,
                                        const int problem_type,
                                        const int dominance_strategy,
                                        MultiObjectiveStats* stats,
                                        std::string* reason,
-                                       int gpu_version = 2);
+                                       int kernel_version = 3);
 
 // Runs top-down frontier enumeration on CUDA for MDDs.
 // Returns NULL on failure and fills reason when provided.
+// Uses the same kernel_version mapping as topdown_cuda_enumerate().
 ParetoFrontier* topdown_mdd_cuda_enumerate(MDD* mdd,
                                            MultiObjectiveStats* stats,
                                            std::string* reason,
-                                           int gpu_version = 2);
+                                           int kernel_version = 3);
 
 // ---------------------------------------------------------------
 // Shared MDD CUDA definitions used by both top-down and coupled approaches
@@ -67,6 +72,7 @@ int compute_layer_value(const thrust::device_vector<int>& offsets,
                         int num_nodes);
 
 // Expands a layer in CUDA (either top-down or bottom-up).
+// Uses the same kernel_version mapping as topdown_cuda_enumerate().
 bool expand_layer_cuda(
     const thrust::device_vector<int>& in_edge_offsets,
     const thrust::device_vector<int>& edge_src,
@@ -79,6 +85,6 @@ bool expand_layer_cuda(
     thrust::device_vector<int>& d_next_offsets,
     thrust::device_vector<ObjType>& d_next_points,
     std::string* reason,
-    int gpu_version = 2);
+    int kernel_version = 3);
 
 #endif
