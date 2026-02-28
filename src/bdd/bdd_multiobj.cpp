@@ -58,6 +58,9 @@ inline void reset_cpu_perf_stats(EnumerationStats* stats) {
     stats->wall_cutset_partial_merge_s = 0.0;
     stats->wall_pack_transfer_s = 0.0;
     stats->wall_join_s = 0.0;
+    stats->kernel_expand_td_s = 0.0;
+    stats->kernel_dominance_s = 0.0;
+    stats->kernel_total_s = 0.0;
     stats->work_candidates_total = 0;
     stats->work_frontier_survivors_total = 0;
     stats->work_frontier_peak_points = 0;

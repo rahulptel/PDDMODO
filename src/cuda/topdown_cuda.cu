@@ -78,6 +78,64 @@ inline bool sync_kernel(const char* where, std::string* reason) {
     return cuda_ok(cudaDeviceSynchronize(), where, reason);
 }
 
+class ScopedCudaEventTimer {
+public:
+    ScopedCudaEventTimer(const char* where, std::string* reason)
+        : start_(NULL), stop_(NULL), active_(false), reason_(reason) {
+        if (!cuda_ok(cudaEventCreate(&start_), where, reason_)) {
+            return;
+        }
+        if (!cuda_ok(cudaEventCreate(&stop_), where, reason_)) {
+            return;
+        }
+        if (!cuda_ok(cudaEventRecord(start_), where, reason_)) {
+            return;
+        }
+        active_ = true;
+    }
+
+    bool ok() const { return active_; }
+
+    bool finish_and_add(double* seconds_out, const char* where) {
+        if (!active_) {
+            return false;
+        }
+        if (!cuda_ok(cudaEventRecord(stop_), where, reason_)) {
+            active_ = false;
+            return false;
+        }
+        if (!cuda_ok(cudaEventSynchronize(stop_), where, reason_)) {
+            active_ = false;
+            return false;
+        }
+        float milliseconds = 0.0f;
+        if (!cuda_ok(cudaEventElapsedTime(&milliseconds, start_, stop_), where, reason_)) {
+            active_ = false;
+            return false;
+        }
+        if (seconds_out != NULL) {
+            *seconds_out += static_cast<double>(milliseconds) / 1000.0;
+        }
+        active_ = false;
+        return true;
+    }
+
+    ~ScopedCudaEventTimer() {
+        if (start_ != NULL) {
+            cudaEventDestroy(start_);
+        }
+        if (stop_ != NULL) {
+            cudaEventDestroy(stop_);
+        }
+    }
+
+private:
+    cudaEvent_t start_;
+    cudaEvent_t stop_;
+    bool active_;
+    std::string* reason_;
+};
+
 inline bool fail_layer_filter(LayerDominanceContext* ctx, const std::string& message) {
     if (ctx != NULL) {
         ctx->failed = true;
@@ -588,6 +646,10 @@ inline bool apply_knapsack_state_dominance_cuda(BDD* bdd,
     thrust::device_vector<int> d_cmp_node_a(num_targets, -1);
     thrust::device_vector<int> d_cmp_node_b(num_targets, -1);
 
+    ScopedCudaEventTimer build_pairs_timer("cudaEventCreate/build_knapsack_cmp_pairs_kernel", ctx->reason);
+    if (!build_pairs_timer.ok()) {
+        return false;
+    }
     build_knapsack_cmp_pairs_kernel<<<ceil_div(num_targets, kThreadsPerBlock), kThreadsPerBlock>>>(
         thrust::raw_pointer_cast(d_active_nodes.data()),
         active_size,
@@ -597,6 +659,10 @@ inline bool apply_knapsack_state_dominance_cuda(BDD* bdd,
         thrust::raw_pointer_cast(d_cmp_node_a.data()),
         thrust::raw_pointer_cast(d_cmp_node_b.data()));
     if (!sync_kernel("build_knapsack_cmp_pairs_kernel", ctx->reason)) {
+        return false;
+    }
+    if (!build_pairs_timer.finish_and_add(stats != NULL ? &stats->kernel_dominance_s : NULL,
+                                          "cudaEventElapsedTime/build_knapsack_cmp_pairs_kernel")) {
         return false;
     }
 
@@ -610,6 +676,10 @@ inline bool apply_knapsack_state_dominance_cuda(BDD* bdd,
     }
 
     thrust::device_vector<int> d_keep(old_total, 1);
+    ScopedCudaEventTimer mark_knapsack_timer("cudaEventCreate/mark_dominated_knapsack_pairs_kernel", ctx->reason);
+    if (!mark_knapsack_timer.ok()) {
+        return false;
+    }
     mark_dominated_knapsack_pairs_kernel<<<num_targets, kThreadsPerBlock>>>(
         thrust::raw_pointer_cast(d_target_nodes.data()),
         thrust::raw_pointer_cast(d_cmp_node_a.data()),
@@ -621,14 +691,26 @@ inline bool apply_knapsack_state_dominance_cuda(BDD* bdd,
     if (!sync_kernel("mark_dominated_knapsack_pairs_kernel", ctx->reason)) {
         return false;
     }
+    if (!mark_knapsack_timer.finish_and_add(stats != NULL ? &stats->kernel_dominance_s : NULL,
+                                            "cudaEventElapsedTime/mark_dominated_knapsack_pairs_kernel")) {
+        return false;
+    }
 
     thrust::device_vector<int> d_filtered_sizes(next_nodes, 0);
+    ScopedCudaEventTimer recompute_sizes_timer("cudaEventCreate/recompute_sizes_from_keep_kernel", ctx->reason);
+    if (!recompute_sizes_timer.ok()) {
+        return false;
+    }
     recompute_sizes_from_keep_kernel<<<ceil_div(next_nodes, kThreadsPerBlock), kThreadsPerBlock>>>(
         thrust::raw_pointer_cast(ctx->next_offsets->data()),
         thrust::raw_pointer_cast(d_keep.data()),
         next_nodes,
         thrust::raw_pointer_cast(d_filtered_sizes.data()));
     if (!sync_kernel("recompute_sizes_from_keep_kernel", ctx->reason)) {
+        return false;
+    }
+    if (!recompute_sizes_timer.finish_and_add(stats != NULL ? &stats->kernel_dominance_s : NULL,
+                                              "cudaEventElapsedTime/recompute_sizes_from_keep_kernel")) {
         return false;
     }
 
@@ -642,6 +724,10 @@ inline bool apply_knapsack_state_dominance_cuda(BDD* bdd,
         thrust::device_vector<int> d_keep_prefix(old_total, 0);
         thrust::exclusive_scan(d_keep.begin(), d_keep.end(), d_keep_prefix.begin());
 
+        ScopedCudaEventTimer scatter_dom_timer("cudaEventCreate/scatter_alive_points_kernel_dominance", ctx->reason);
+        if (!scatter_dom_timer.ok()) {
+            return false;
+        }
         scatter_alive_points_kernel<<<ceil_div(old_total, kThreadsPerBlock), kThreadsPerBlock>>>(
             thrust::raw_pointer_cast(d_keep.data()),
             thrust::raw_pointer_cast(d_keep_prefix.data()),
@@ -649,6 +735,10 @@ inline bool apply_knapsack_state_dominance_cuda(BDD* bdd,
             thrust::raw_pointer_cast(d_filtered_points.data()),
             old_total);
         if (!sync_kernel("scatter_alive_points_kernel_dominance", ctx->reason)) {
+            return false;
+        }
+        if (!scatter_dom_timer.finish_and_add(stats != NULL ? &stats->kernel_dominance_s : NULL,
+                                              "cudaEventElapsedTime/scatter_alive_points_kernel_dominance")) {
             return false;
         }
     }
@@ -863,12 +953,20 @@ ParetoFrontier* topdown_cuda_enumerate(BDD* bdd,
             thrust::device_vector<int> d_edge_counts(num_edges, 0);
             thrust::device_vector<int> d_edge_offsets(num_edges + 1, 0);
 
+            ScopedCudaEventTimer edge_counts_timer("cudaEventCreate/compute_edge_counts_kernel", reason);
+            if (!edge_counts_timer.ok()) {
+                return NULL;
+            }
             compute_edge_counts_kernel<<<ceil_div(num_edges, kThreadsPerBlock), kThreadsPerBlock>>>(
                 thrust::raw_pointer_cast(packed.edge_src.data()),
                 thrust::raw_pointer_cast(d_prev_offsets.data()),
                 thrust::raw_pointer_cast(d_edge_counts.data()),
                 num_edges);
             if (!sync_kernel("compute_edge_counts_kernel", reason)) {
+                return NULL;
+            }
+            if (!edge_counts_timer.finish_and_add(stats != NULL ? &stats->kernel_expand_td_s : NULL,
+                                                  "cudaEventElapsedTime/compute_edge_counts_kernel")) {
                 return NULL;
             }
 
@@ -882,6 +980,10 @@ ParetoFrontier* topdown_cuda_enumerate(BDD* bdd,
             if (total_candidates > 0) {
                 thrust::device_vector<ObjType> d_cand_points(total_candidates * NOBJS, 0);
 
+                ScopedCudaEventTimer expand_timer("cudaEventCreate/expand_candidates_points_kernel", reason);
+                if (!expand_timer.ok()) {
+                    return NULL;
+                }
                 expand_candidates_points_kernel<<<ceil_div(num_edges, kThreadsPerBlock), kThreadsPerBlock>>>(
                     thrust::raw_pointer_cast(packed.edge_src.data()),
                     thrust::raw_pointer_cast(packed.edge_weights.data()),
@@ -894,12 +996,20 @@ ParetoFrontier* topdown_cuda_enumerate(BDD* bdd,
                 if (!sync_kernel("expand_candidates_points_kernel", reason)) {
                     return NULL;
                 }
+                if (!expand_timer.finish_and_add(stats != NULL ? &stats->kernel_expand_td_s : NULL,
+                                                 "cudaEventElapsedTime/expand_candidates_points_kernel")) {
+                    return NULL;
+                }
 
                 thrust::device_vector<int> d_alive(total_candidates, 0);
                 thrust::device_vector<int> d_cand_counts(next_nodes, 0);
                 thrust::device_vector<int> d_dst_blocks;
                 if (kernel_version == 3) {
                     d_dst_blocks.assign(next_nodes, 0);
+                    ScopedCudaEventTimer dst_counts_timer("cudaEventCreate/compute_dst_candidate_counts_kernel_v3", reason);
+                    if (!dst_counts_timer.ok()) {
+                        return NULL;
+                    }
                     compute_dst_candidate_counts_kernel<<<ceil_div(next_nodes, kThreadsPerBlock), kThreadsPerBlock>>>(
                         thrust::raw_pointer_cast(packed.in_edge_offsets.data()),
                         thrust::raw_pointer_cast(d_edge_offsets.data()),
@@ -909,7 +1019,15 @@ ParetoFrontier* topdown_cuda_enumerate(BDD* bdd,
                     if (!sync_kernel("compute_dst_candidate_counts_kernel_v3", reason)) {
                         return NULL;
                     }
+                    if (!dst_counts_timer.finish_and_add(stats != NULL ? &stats->kernel_expand_td_s : NULL,
+                                                         "cudaEventElapsedTime/compute_dst_candidate_counts_kernel_v3")) {
+                        return NULL;
+                    }
                 } else {
+                    ScopedCudaEventTimer dst_counts_timer("cudaEventCreate/compute_dst_candidate_counts_kernel", reason);
+                    if (!dst_counts_timer.ok()) {
+                        return NULL;
+                    }
                     compute_dst_candidate_counts_kernel<<<ceil_div(next_nodes, kThreadsPerBlock), kThreadsPerBlock>>>(
                         thrust::raw_pointer_cast(packed.in_edge_offsets.data()),
                         thrust::raw_pointer_cast(d_edge_offsets.data()),
@@ -917,6 +1035,10 @@ ParetoFrontier* topdown_cuda_enumerate(BDD* bdd,
                         thrust::raw_pointer_cast(d_cand_counts.data()),
                         NULL);
                     if (!sync_kernel("compute_dst_candidate_counts_kernel", reason)) {
+                        return NULL;
+                    }
+                    if (!dst_counts_timer.finish_and_add(stats != NULL ? &stats->kernel_expand_td_s : NULL,
+                                                         "cudaEventElapsedTime/compute_dst_candidate_counts_kernel")) {
                         return NULL;
                     }
                 }
@@ -927,6 +1049,10 @@ ParetoFrontier* topdown_cuda_enumerate(BDD* bdd,
                                                         thrust::maximum<int>());
                 if (max_seg_size > 0) {
                     if (kernel_version == 1) {
+                        ScopedCudaEventTimer dom_timer("cudaEventCreate/mark_dominated_by_dst_single_block_kernel", reason);
+                        if (!dom_timer.ok()) {
+                            return NULL;
+                        }
                         mark_dominated_by_dst_single_block_kernel<<<next_nodes, kThreadsPerBlock>>>(
                             thrust::raw_pointer_cast(d_cand_points.data()),
                             thrust::raw_pointer_cast(packed.in_edge_offsets.data()),
@@ -937,9 +1063,17 @@ ParetoFrontier* topdown_cuda_enumerate(BDD* bdd,
                         if (!sync_kernel("mark_dominated_by_dst_single_block_kernel", reason)) {
                             return NULL;
                         }
+                        if (!dom_timer.finish_and_add(stats != NULL ? &stats->kernel_dominance_s : NULL,
+                                                      "cudaEventElapsedTime/mark_dominated_by_dst_single_block_kernel")) {
+                            return NULL;
+                        }
                     } else if (kernel_version == 2) {
                         const int num_tiles = ceil_div(max_seg_size, kThreadsPerBlock);
                         dim3 grid(next_nodes, num_tiles);
+                        ScopedCudaEventTimer dom_timer("cudaEventCreate/mark_dominated_by_dst_tiled_kernel", reason);
+                        if (!dom_timer.ok()) {
+                            return NULL;
+                        }
                         mark_dominated_by_dst_tiled_kernel<<<grid, kThreadsPerBlock>>>(
                             thrust::raw_pointer_cast(d_cand_points.data()),
                             thrust::raw_pointer_cast(packed.in_edge_offsets.data()),
@@ -950,12 +1084,20 @@ ParetoFrontier* topdown_cuda_enumerate(BDD* bdd,
                         if (!sync_kernel("mark_dominated_by_dst_tiled_kernel", reason)) {
                             return NULL;
                         }
+                        if (!dom_timer.finish_and_add(stats != NULL ? &stats->kernel_dominance_s : NULL,
+                                                      "cudaEventElapsedTime/mark_dominated_by_dst_tiled_kernel")) {
+                            return NULL;
+                        }
                     } else if (kernel_version == 3) {
                         thrust::device_vector<int> d_block_offsets(next_nodes + 1, 0);
                         thrust::exclusive_scan(d_dst_blocks.begin(), d_dst_blocks.end(), d_block_offsets.begin());
                         d_block_offsets[next_nodes] = thrust::reduce(d_dst_blocks.begin(), d_dst_blocks.end(), 0);
                         const int total_blocks = d_block_offsets[next_nodes];
                         if (total_blocks > 0) {
+                            ScopedCudaEventTimer dom_timer("cudaEventCreate/mark_dominated_by_dst_dynamic_1d_kernel", reason);
+                            if (!dom_timer.ok()) {
+                                return NULL;
+                            }
                             mark_dominated_by_dst_dynamic_1d_kernel<<<total_blocks, kThreadsPerBlock>>>(
                                 thrust::raw_pointer_cast(d_cand_points.data()),
                                 thrust::raw_pointer_cast(packed.in_edge_offsets.data()),
@@ -965,6 +1107,10 @@ ParetoFrontier* topdown_cuda_enumerate(BDD* bdd,
                                 thrust::raw_pointer_cast(d_alive.data()),
                                 thrust::raw_pointer_cast(d_next_sizes.data()));
                             if (!sync_kernel("mark_dominated_by_dst_dynamic_1d_kernel", reason)) {
+                                return NULL;
+                            }
+                            if (!dom_timer.finish_and_add(stats != NULL ? &stats->kernel_dominance_s : NULL,
+                                                          "cudaEventElapsedTime/mark_dominated_by_dst_dynamic_1d_kernel")) {
                                 return NULL;
                             }
                         }
@@ -983,6 +1129,10 @@ ParetoFrontier* topdown_cuda_enumerate(BDD* bdd,
 
                 d_next_points.resize(total_next * NOBJS);
                 if (total_next > 0) {
+                    ScopedCudaEventTimer scatter_timer("cudaEventCreate/scatter_alive_points_kernel", reason);
+                    if (!scatter_timer.ok()) {
+                        return NULL;
+                    }
                     scatter_alive_points_kernel<<<ceil_div(total_candidates, kThreadsPerBlock), kThreadsPerBlock>>>(
                         thrust::raw_pointer_cast(d_alive.data()),
                         thrust::raw_pointer_cast(d_alive_prefix.data()),
@@ -990,6 +1140,10 @@ ParetoFrontier* topdown_cuda_enumerate(BDD* bdd,
                         thrust::raw_pointer_cast(d_next_points.data()),
                         total_candidates);
                     if (!sync_kernel("scatter_alive_points_kernel", reason)) {
+                        return NULL;
+                    }
+                    if (!scatter_timer.finish_and_add(stats != NULL ? &stats->kernel_expand_td_s : NULL,
+                                                      "cudaEventElapsedTime/scatter_alive_points_kernel")) {
                         return NULL;
                     }
                 }
@@ -1054,6 +1208,9 @@ ParetoFrontier* topdown_cuda_enumerate(BDD* bdd,
 
     if (reason != NULL) {
         reason->clear();
+    }
+    if (stats != NULL) {
+        stats->kernel_total_s = stats->kernel_expand_td_s + stats->kernel_dominance_s;
     }
     return frontier;
 }
@@ -1131,8 +1288,12 @@ ParetoFrontier* topdown_mdd_cuda_enumerate(MDD* mdd,
         long long layer_candidates = 0;
         long long layer_survivors = 0;
 
+        ScopedCudaEventTimer layer_expand_timer("cudaEventCreate/expand_layer_cuda", reason);
+        if (!layer_expand_timer.ok()) {
+            return NULL;
+        }
         t0 = clock();
-            if (!expand_layer_cuda(
+        if (!expand_layer_cuda(
                     packed[l].td_in_edge_offsets,
                     packed[l].td_edge_src,
                     packed[l].td_edge_weights,
@@ -1141,6 +1302,10 @@ ParetoFrontier* topdown_mdd_cuda_enumerate(MDD* mdd,
                     d_td_offsets, d_td_points,
                     d_ns, d_no, d_np, reason, kernel_version,
                     &layer_candidates, &layer_survivors)) {
+            return NULL;
+        }
+        if (!layer_expand_timer.finish_and_add(stats != NULL ? &stats->kernel_expand_td_s : NULL,
+                                               "cudaEventElapsedTime/expand_layer_cuda")) {
             return NULL;
         }
         t1 = clock();
@@ -1183,5 +1348,8 @@ ParetoFrontier* topdown_mdd_cuda_enumerate(MDD* mdd,
     // but the node dominance filter inside `expand_layer_cuda` handles standard local state dominance.
 
     if (reason != NULL) reason->clear();
+    if (stats != NULL) {
+        stats->kernel_total_s = stats->kernel_expand_td_s + stats->kernel_dominance_s;
+    }
     return frontier;
 }

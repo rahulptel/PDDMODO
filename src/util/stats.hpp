@@ -48,6 +48,10 @@ struct EnumerationStats {
     // Aggregated wall times (seconds) for GPU packing and join phases
     double wall_pack_transfer_s;
     double wall_join_s;
+    // Aggregated CUDA kernel times captured with cudaEvent_t (seconds)
+    double kernel_expand_td_s;
+    double kernel_dominance_s;
+    double kernel_total_s;
 
     // Method-agnostic work counters
     long long work_candidates_total;
@@ -84,6 +88,9 @@ struct EnumerationStats {
           wall_cutset_partial_merge_s(0.0),
           wall_pack_transfer_s(0.0),
           wall_join_s(0.0),
+          kernel_expand_td_s(0.0),
+          kernel_dominance_s(0.0),
+          kernel_total_s(0.0),
           work_candidates_total(0),
           work_frontier_survivors_total(0),
           work_frontier_peak_points(0),

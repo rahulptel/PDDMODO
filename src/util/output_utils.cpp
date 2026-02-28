@@ -181,6 +181,9 @@ bool write_stats_jsonl(const string &out_path,
     const double wall_compile_s = stats != NULL ? stats->wall_compile_s : 0.0;
     const double wall_enumeration_s = stats != NULL ? stats->wall_enumeration_s : 0.0;
     const double wall_total_end_to_end_s = stats != NULL ? stats->wall_total_end_to_end_s : 0.0;
+    const double kernel_expand_td_s = stats != NULL ? stats->kernel_expand_td_s : 0.0;
+    const double kernel_dominance_s = stats != NULL ? stats->kernel_dominance_s : 0.0;
+    const double kernel_total_s = stats != NULL ? stats->kernel_total_s : 0.0;
     const int layer_coupling = stats != NULL ? stats->layer_coupling : 0;
     const int dominance_filtered_total = stats != NULL ? stats->dominance_filtered_total : 0;
     const long long work_candidates_total = stats != NULL ? stats->work_candidates_total : 0;
@@ -217,6 +220,11 @@ bool write_stats_jsonl(const string &out_path,
     out << "\"wall_compile_s\":" << wall_compile_s << ",";
     out << "\"wall_enumeration_s\":" << wall_enumeration_s << ",";
     out << "\"wall_total_end_to_end_s\":" << wall_total_end_to_end_s;
+    out << "},";
+    out << "\"kernel\":{";
+    out << "\"kernel_expand_td_s\":" << kernel_expand_td_s << ",";
+    out << "\"kernel_dominance_s\":" << kernel_dominance_s << ",";
+    out << "\"kernel_total_s\":" << kernel_total_s;
     out << "}";
     out << "},";
 
