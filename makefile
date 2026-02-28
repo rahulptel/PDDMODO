@@ -90,6 +90,7 @@ SRC_DIRS  := $(shell find $(SRC_DIR) -type d)
 OBJ_DIRS  := $(addprefix $(OBJ_DIR)/,$(SRC_DIRS))
 
 SOURCES_CPP := $(shell find $(SRC_DIR) -name '*.cpp')
+SOURCES_CPP := $(filter-out src/cuda/cuda_stubs.cpp, $(SOURCES_CPP))
 
 OBJ_FILES   := $(addprefix $(OBJ_DIR)/, $(SOURCES_CPP:.cpp=.o))
 ifeq ($(ENABLE_CUDA),1)
@@ -97,6 +98,9 @@ CUDA_SOURCES  := $(shell find $(SRC_DIR) -name '*.cu')
 CUDA_OBJ_FILES := $(addprefix $(OBJ_DIR)/, $(CUDA_SOURCES:.cu=.o))
 OBJ_FILES     += $(CUDA_OBJ_FILES)
 vpath %.cu $(SRC_DIRS)
+else
+STUB_SOURCES := src/cuda/cuda_stubs.cpp
+OBJ_FILES   += $(addprefix $(OBJ_DIR)/, $(STUB_SOURCES:.cpp=.o))
 endif
 
 vpath %.cpp $(SRC_DIRS)

@@ -5,18 +5,9 @@
 #include "bdd_multiobj.hpp"
 #include "bdd_alg.hpp"
 #include <chrono>
-#ifdef USE_CUDA
-#include "../cuda/topdown_cuda.hpp"
-#include "../cuda/coupled_cuda.hpp"
-#endif
 
+#include "../cuda/cuda_wrappers.hpp"
 #include "../util/omp_compat.hpp"
-
-#ifdef USE_CUDA
-#pragma weak topdown_cuda_enumerate
-#pragma weak topdown_mdd_cuda_enumerate
-#pragma weak coupled_cuda_enumerate
-#endif
 
 typedef std::pair<int,int> intpair;
 
@@ -196,32 +187,8 @@ ParetoFrontier* BDDMultiObj::pareto_frontier_topdown_cuda(BDD* bdd, bool maximiz
         reset_cpu_perf_stats(stats);
     }
 
-#ifdef USE_CUDA
-    if (topdown_cuda_enumerate == NULL) {
-        if (reason != NULL) {
-            *reason = "CUDA top-down enumeration symbol is unavailable in this binary";
-        }
-        return NULL;
-    }
-
-    std::string local_reason;
-    std::string* active_reason = reason != NULL ? reason : &local_reason;
-    ParetoFrontier* frontier = topdown_cuda_enumerate(bdd, maximization, problem_type, dominance_strategy, stats, active_reason, kernel_version);
-    if (frontier == NULL && reason != NULL && reason->empty()) {
-        *reason = "CUDA top-down enumeration failed";
-    }
+    ParetoFrontier* frontier = ::topdown_cuda_enumerate(bdd, maximization, problem_type, dominance_strategy, stats, reason, kernel_version);
     return frontier;
-#else
-    (void)bdd;
-    (void)maximization;
-    (void)problem_type;
-    (void)dominance_strategy;
-    (void)kernel_version;
-    if (reason != NULL) {
-        *reason = "GPU backend requested but binary was built without CUDA support";
-    }
-    return NULL;
-#endif
 }
 
 //
@@ -236,22 +203,8 @@ ParetoFrontier* BDDMultiObj::pareto_frontier_topdown_cuda(MDD* mdd, EnumerationS
         reset_cpu_perf_stats(stats);
     }
 
-#ifdef USE_CUDA
-    std::string local_reason;
-    std::string* active_reason = reason != NULL ? reason : &local_reason;
-    ParetoFrontier* frontier = topdown_mdd_cuda_enumerate(mdd, stats, active_reason, kernel_version);
-    if (frontier == NULL && reason != NULL && reason->empty()) {
-        *reason = "CUDA top-down enumeration failed for MDD";
-    }
+    ParetoFrontier* frontier = ::topdown_mdd_cuda_enumerate(mdd, stats, reason, kernel_version);
     return frontier;
-#else
-    (void)mdd;
-    (void)kernel_version;
-    if (reason != NULL) {
-        *reason = "GPU backend requested but binary was built without CUDA support";
-    }
-    return NULL;
-#endif
 }
 
 //
@@ -1286,29 +1239,8 @@ ParetoFrontier* BDDMultiObj::pareto_frontier_dynamic_layer_cutset_cuda(MDD* mdd,
         reset_cpu_perf_stats(stats);
     }
 
-#ifdef USE_CUDA
-    if (coupled_cuda_enumerate == NULL) {
-        if (reason != NULL) {
-            *reason = "CUDA coupled enumeration symbol is unavailable in this binary";
-        }
-        return NULL;
-    }
-
-    std::string local_reason;
-    std::string* active_reason = reason != NULL ? reason : &local_reason;
-    ParetoFrontier* frontier = coupled_cuda_enumerate(mdd, stats, active_reason, kernel_version);
-    if (frontier == NULL && reason != NULL && reason->empty()) {
-        *reason = "CUDA coupled enumeration failed";
-    }
+    ParetoFrontier* frontier = ::coupled_cuda_enumerate(mdd, stats, reason, kernel_version);
     return frontier;
-#else
-    (void)mdd;
-    (void)kernel_version;
-    if (reason != NULL) {
-        *reason = "GPU backend requested but binary was built without CUDA support";
-    }
-    return NULL;
-#endif
 }
 
 
