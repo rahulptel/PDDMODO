@@ -541,7 +541,7 @@ struct IsPositiveInt {
 
 inline bool apply_knapsack_state_dominance_cuda(BDD* bdd,
                                                 const int layer,
-                                                MultiObjectiveStats* stats,
+                                                EnumerationStats* stats,
                                                 LayerDominanceContext* ctx) {
     if (ctx == NULL || ctx->next_sizes == NULL || ctx->next_offsets == NULL || ctx->next_points == NULL) {
         return fail_layer_filter(ctx, "Invalid CUDA dominance layer context");
@@ -668,7 +668,7 @@ void BDDMultiObj::filter_dominance_cuda(BDD* bdd,
                                         const int layer,
                                         const int problem_type,
                                         const int dominance_strategy,
-                                        MultiObjectiveStats* stats) {
+                                        EnumerationStats* stats) {
     if (dominance_strategy <= 0) {
         return;
     }
@@ -684,7 +684,7 @@ void BDDMultiObj::filter_dominance_cuda(BDD* bdd,
     }
 }
 
-void BDDMultiObj::filter_dominance_knapsack_cuda(BDD* bdd, const int layer, MultiObjectiveStats* stats) {
+void BDDMultiObj::filter_dominance_knapsack_cuda(BDD* bdd, const int layer, EnumerationStats* stats) {
     LayerDominanceContext* ctx = g_layer_dom_ctx;
     if (ctx == NULL) {
         return;
@@ -712,7 +712,7 @@ ParetoFrontier* topdown_cuda_enumerate(BDD* bdd,
                                        bool maximization,
                                        const int problem_type,
                                        const int dominance_strategy,
-                                       MultiObjectiveStats* stats,
+                                       EnumerationStats* stats,
                                        std::string* reason,
                                        int kernel_version) {
     if (kernel_version < 1 || kernel_version > 3) {
@@ -1049,7 +1049,7 @@ ParetoFrontier* topdown_cuda_enumerate(BDD* bdd,
 // ---------------------------------------------------------------
 
 ParetoFrontier* topdown_mdd_cuda_enumerate(MDD* mdd,
-                                           MultiObjectiveStats* stats,
+                                           EnumerationStats* stats,
                                            std::string* reason,
                                            int kernel_version) {
     using std::cout;

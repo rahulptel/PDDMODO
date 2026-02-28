@@ -12,7 +12,8 @@
 #include "../bdd/pareto_frontier.hpp"
 #include <thrust/device_vector.h>
 
-struct MultiObjectiveStats;
+struct EnumerationStats;
+using MultiObjectiveStats = EnumerationStats;
 
 // Checks whether at least one CUDA device is available.
 bool topdown_cuda_available(std::string* reason);
@@ -27,7 +28,7 @@ ParetoFrontier* topdown_cuda_enumerate(BDD* bdd,
                                        bool maximization,
                                        const int problem_type,
                                        const int dominance_strategy,
-                                       MultiObjectiveStats* stats,
+                                       EnumerationStats* stats,
                                        std::string* reason,
                                        int kernel_version = 3);
 
@@ -35,7 +36,7 @@ ParetoFrontier* topdown_cuda_enumerate(BDD* bdd,
 // Returns NULL on failure and fills reason when provided.
 // Uses the same kernel_version mapping as topdown_cuda_enumerate().
 ParetoFrontier* topdown_mdd_cuda_enumerate(MDD* mdd,
-                                           MultiObjectiveStats* stats,
+                                           EnumerationStats* stats,
                                            std::string* reason,
                                            int kernel_version = 3);
 

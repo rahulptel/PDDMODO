@@ -719,7 +719,7 @@ bool coupled_cuda_available(std::string* reason) {
 }
 
 ParetoFrontier* coupled_cuda_enumerate(MDD* mdd,
-                                       MultiObjectiveStats* stats,
+                                       EnumerationStats* stats,
                                        std::string* reason,
                                        int kernel_version) {
     using std::cout;

@@ -38,7 +38,7 @@
 
 using namespace std;
 
-struct RunStatsRecord
+struct RunSummaryStats
 {
     bool is_tsp_branch;
     bool postprocess_sort_applied;
@@ -57,7 +57,7 @@ struct RunStatsRecord
     double enum_wall_s;
     double total_wall_s_end_to_end;
 
-    RunStatsRecord()
+    RunSummaryStats()
         : is_tsp_branch(false),
           postprocess_sort_applied(true),
           num_solutions(0),
@@ -191,7 +191,7 @@ static void print_perf_log(const string &input_path,
                            const int method,
                            const string &backend_name,
                            const int cpu_threads,
-                           const MultiObjectiveStats *stats,
+                           const EnumerationStats *stats,
                            const double compile_wall_s,
                            const double enum_wall_s,
                            const double total_wall_s,
@@ -280,8 +280,8 @@ static string json_escape(const string &value)
 
 static bool write_stats_jsonl(const string &out_path,
                               const CliOptions &opts,
-                              const MultiObjectiveStats *stats,
-                              const RunStatsRecord &record,
+                              const EnumerationStats *stats,
+                              const RunSummaryStats &record,
                               string *error)
 {
     ofstream out(out_path.c_str(), ios::out | ios::trunc);
@@ -555,14 +555,15 @@ int main(int argc, char *argv[])
         const WallClock::time_point pareto_tsp_wall_begin = WallClock::now();
         clock_t pareto_tsp_cpu = clock();
 
-        MultiObjectiveStats *statsMultiObj = new MultiObjectiveStats;
-        statsMultiObj->cpu_perf_enabled = (backend == BACKEND_CPU) && (perf_log || save_stats);
+        // Solver-owned stats populated during frontier enumeration.
+        EnumerationStats *enumeration_stats = new EnumerationStats;
+        enumeration_stats->cpu_perf_enabled = (backend == BACKEND_CPU) && (perf_log || save_stats);
         ParetoFrontier *pareto_frontier = NULL;
 
         if (method == 1) { // Top-down
             if (backend == BACKEND_GPU) {
                 string cuda_reason;
-                pareto_frontier = BDDMultiObj::pareto_frontier_topdown_cuda(mdd, statsMultiObj, &cuda_reason, kernel_version);
+                pareto_frontier = BDDMultiObj::pareto_frontier_topdown_cuda(mdd, enumeration_stats, &cuda_reason, kernel_version);
                 if (pareto_frontier == NULL) {
                     cout << "Error - GPU backend requested but top-down enumeration failed";
                     if (!cuda_reason.empty()) cout << ": " << cuda_reason;
@@ -570,12 +571,12 @@ int main(int argc, char *argv[])
                     exit(1);
                 }
             } else {
-                pareto_frontier = BDDMultiObj::pareto_frontier_topdown(mdd, statsMultiObj, cpu_threads);
+                pareto_frontier = BDDMultiObj::pareto_frontier_topdown(mdd, enumeration_stats, cpu_threads);
             }
         } else if (method == 3) { // Coupled
             if (backend == BACKEND_GPU) {
                 string cuda_reason;
-                pareto_frontier = BDDMultiObj::pareto_frontier_dynamic_layer_cutset_cuda(mdd, statsMultiObj, &cuda_reason, kernel_version);
+                pareto_frontier = BDDMultiObj::pareto_frontier_dynamic_layer_cutset_cuda(mdd, enumeration_stats, &cuda_reason, kernel_version);
                 if (pareto_frontier == NULL) {
                     cout << "Error - GPU backend requested but coupled enumeration failed";
                     if (!cuda_reason.empty()) cout << ": " << cuda_reason;
@@ -583,7 +584,7 @@ int main(int argc, char *argv[])
                     exit(1);
                 }
             } else {
-                pareto_frontier = BDDMultiObj::pareto_frontier_dynamic_layer_cutset(mdd, statsMultiObj, cpu_threads);
+                pareto_frontier = BDDMultiObj::pareto_frontier_dynamic_layer_cutset(mdd, enumeration_stats, cpu_threads);
             }
         } else {
             cout << "Error - method " << method << " not valid for TSP" << endl;
@@ -613,23 +614,24 @@ int main(int argc, char *argv[])
         const double total_wall_s_end_to_end =
             std::chrono::duration_cast<std::chrono::duration<double> >(WallClock::now() - run_wall_begin).count();
 
-        RunStatsRecord stats_record;
-        stats_record.is_tsp_branch = true;
-        stats_record.postprocess_sort_applied = true;
-        stats_record.num_solutions = pareto_frontier->get_num_sols();
-        stats_record.original_width = -1;
-        stats_record.reduced_width = -1;
-        stats_record.original_num_nodes = -1;
-        stats_record.reduced_num_nodes = -1;
-        stats_record.layer_coupling = statsMultiObj->layer_coupling;
-        stats_record.pareto_dominance_filtered = statsMultiObj->pareto_dominance_filtered;
-        stats_record.pareto_dominance_cpu_s = ((double)statsMultiObj->pareto_dominance_time) / CLOCKS_PER_SEC;
-        stats_record.compile_cpu_s = ((double)compilation_tsp) / CLOCKS_PER_SEC;
-        stats_record.enum_cpu_s = ((double)pareto_tsp_cpu) / CLOCKS_PER_SEC;
-        stats_record.total_cpu_s = stats_record.compile_cpu_s + stats_record.enum_cpu_s;
-        stats_record.compile_wall_s = compilation_wall_s;
-        stats_record.enum_wall_s = pareto_enum_wall_s;
-        stats_record.total_wall_s_end_to_end = total_wall_s_end_to_end;
+        // Run-level summary assembled in main for reporting/output only.
+        RunSummaryStats run_summary;
+        run_summary.is_tsp_branch = true;
+        run_summary.postprocess_sort_applied = true;
+        run_summary.num_solutions = pareto_frontier->get_num_sols();
+        run_summary.original_width = -1;
+        run_summary.reduced_width = -1;
+        run_summary.original_num_nodes = -1;
+        run_summary.reduced_num_nodes = -1;
+        run_summary.layer_coupling = enumeration_stats->layer_coupling;
+        run_summary.pareto_dominance_filtered = enumeration_stats->pareto_dominance_filtered;
+        run_summary.pareto_dominance_cpu_s = ((double)enumeration_stats->pareto_dominance_time) / CLOCKS_PER_SEC;
+        run_summary.compile_cpu_s = ((double)compilation_tsp) / CLOCKS_PER_SEC;
+        run_summary.enum_cpu_s = ((double)pareto_tsp_cpu) / CLOCKS_PER_SEC;
+        run_summary.total_cpu_s = run_summary.compile_cpu_s + run_summary.enum_cpu_s;
+        run_summary.compile_wall_s = compilation_wall_s;
+        run_summary.enum_wall_s = pareto_enum_wall_s;
+        run_summary.total_wall_s_end_to_end = total_wall_s_end_to_end;
 
         cout << pareto_frontier->get_num_sols() << endl;
         cout << (double)(compilation_tsp + pareto_tsp_cpu) / CLOCKS_PER_SEC << endl;
@@ -649,7 +651,7 @@ int main(int argc, char *argv[])
                            method,
                            backend_name,
                            cpu_threads,
-                           statsMultiObj,
+                           enumeration_stats,
                            compilation_wall_s,
                            pareto_enum_wall_s,
                            total_wall_s,
@@ -661,7 +663,7 @@ int main(int argc, char *argv[])
         if (save_stats)
         {
             string stats_error;
-            if (!write_stats_jsonl(stats_out_path, options, statsMultiObj, stats_record, &stats_error))
+            if (!write_stats_jsonl(stats_out_path, options, enumeration_stats, run_summary, &stats_error))
             {
                 cerr << "Warning - failed to save stats to '" << stats_out_path << "'";
                 if (!stats_error.empty())
@@ -690,9 +692,10 @@ int main(int argc, char *argv[])
     // cout << "\tReduced number of nodes: " << reduced_num_nodes << endl;
     // cout << "\n\tBDD compilation total time: " << timers.get_time(bdd_compilation_time) << endl;
 
-    // Initialize multiobjective stats
-    MultiObjectiveStats *statsMultiObj = new MultiObjectiveStats;
-    statsMultiObj->cpu_perf_enabled = (backend == BACKEND_CPU) && (perf_log || save_stats);
+    // Initialize enumeration stats
+    // Solver-owned stats populated during frontier enumeration.
+    EnumerationStats *enumeration_stats = new EnumerationStats;
+    enumeration_stats->cpu_perf_enabled = (backend == BACKEND_CPU) && (perf_log || save_stats);
 
     // Compute pareto frontier based on methodology
     // cout << "\n\nComputing pareto frontier..." << endl;
@@ -706,7 +709,7 @@ int main(int argc, char *argv[])
         if (backend == BACKEND_GPU)
         {
             string cuda_reason;
-            pareto_frontier = BDDMultiObj::pareto_frontier_topdown_cuda(bdd, maximization, problem_type, dominance, statsMultiObj, &cuda_reason, kernel_version);
+            pareto_frontier = BDDMultiObj::pareto_frontier_topdown_cuda(bdd, maximization, problem_type, dominance, enumeration_stats, &cuda_reason, kernel_version);
             if (pareto_frontier == NULL)
             {
                 cout << "Error - GPU backend requested but top-down enumeration failed";
@@ -720,7 +723,7 @@ int main(int argc, char *argv[])
         }
         else
         {
-            pareto_frontier = BDDMultiObj::pareto_frontier_topdown(bdd, maximization, problem_type, dominance, statsMultiObj, cpu_threads);
+            pareto_frontier = BDDMultiObj::pareto_frontier_topdown(bdd, maximization, problem_type, dominance, enumeration_stats, cpu_threads);
         }
     }
     else if (method == 2)
@@ -731,7 +734,7 @@ int main(int argc, char *argv[])
             cout << "Error - GPU backend is unsupported for method 2." << endl;
             exit(1);
         }
-        pareto_frontier = BDDMultiObj::pareto_frontier_bottomup(bdd, maximization, problem_type, dominance, statsMultiObj, cpu_threads);
+        pareto_frontier = BDDMultiObj::pareto_frontier_bottomup(bdd, maximization, problem_type, dominance, enumeration_stats, cpu_threads);
     }
     else if (method == 3)
     {
@@ -741,7 +744,7 @@ int main(int argc, char *argv[])
             cout << "Error - GPU backend is unsupported for method 3." << endl;
             exit(1);
         }
-        pareto_frontier = BDDMultiObj::pareto_frontier_dynamic_layer_cutset(bdd, maximization, problem_type, dominance, statsMultiObj, cpu_threads);
+        pareto_frontier = BDDMultiObj::pareto_frontier_dynamic_layer_cutset(bdd, maximization, problem_type, dominance, enumeration_stats, cpu_threads);
     }
     else
     {
@@ -806,23 +809,24 @@ int main(int argc, char *argv[])
     const double total_wall_s_end_to_end =
         std::chrono::duration_cast<std::chrono::duration<double> >(WallClock::now() - run_wall_begin).count();
 
-    RunStatsRecord stats_record;
-    stats_record.is_tsp_branch = false;
-    stats_record.postprocess_sort_applied = true;
-    stats_record.num_solutions = pareto_frontier->get_num_sols();
-    stats_record.original_width = original_width;
-    stats_record.reduced_width = reduced_width;
-    stats_record.original_num_nodes = original_num_nodes;
-    stats_record.reduced_num_nodes = reduced_num_nodes;
-    stats_record.layer_coupling = statsMultiObj->layer_coupling;
-    stats_record.pareto_dominance_filtered = statsMultiObj->pareto_dominance_filtered;
-    stats_record.pareto_dominance_cpu_s = ((double)statsMultiObj->pareto_dominance_time) / CLOCKS_PER_SEC;
-    stats_record.compile_cpu_s = timers.get_time(bdd_compilation_time);
-    stats_record.enum_cpu_s = timers.get_time(pareto_time);
-    stats_record.total_cpu_s = stats_record.compile_cpu_s + stats_record.enum_cpu_s;
-    stats_record.compile_wall_s = compilation_wall_s;
-    stats_record.enum_wall_s = pareto_enum_wall_s;
-    stats_record.total_wall_s_end_to_end = total_wall_s_end_to_end;
+    // Run-level summary assembled in main for reporting/output only.
+    RunSummaryStats run_summary;
+    run_summary.is_tsp_branch = false;
+    run_summary.postprocess_sort_applied = true;
+    run_summary.num_solutions = pareto_frontier->get_num_sols();
+    run_summary.original_width = original_width;
+    run_summary.reduced_width = reduced_width;
+    run_summary.original_num_nodes = original_num_nodes;
+    run_summary.reduced_num_nodes = reduced_num_nodes;
+    run_summary.layer_coupling = enumeration_stats->layer_coupling;
+    run_summary.pareto_dominance_filtered = enumeration_stats->pareto_dominance_filtered;
+    run_summary.pareto_dominance_cpu_s = ((double)enumeration_stats->pareto_dominance_time) / CLOCKS_PER_SEC;
+    run_summary.compile_cpu_s = timers.get_time(bdd_compilation_time);
+    run_summary.enum_cpu_s = timers.get_time(pareto_time);
+    run_summary.total_cpu_s = run_summary.compile_cpu_s + run_summary.enum_cpu_s;
+    run_summary.compile_wall_s = compilation_wall_s;
+    run_summary.enum_wall_s = pareto_enum_wall_s;
+    run_summary.total_wall_s_end_to_end = total_wall_s_end_to_end;
 
     cout << pareto_frontier->get_num_sols() << endl;
     cout << (timers.get_time(bdd_compilation_time) + timers.get_time(pareto_time)) << endl;
@@ -835,9 +839,9 @@ int main(int argc, char *argv[])
     cout << "\t" << reduced_num_nodes;
     cout << "\t" << timers.get_time(bdd_compilation_time);
     cout << "\t" << timers.get_time(pareto_time);
-    cout << "\t" << statsMultiObj->layer_coupling;
-    cout << "\t" << statsMultiObj->pareto_dominance_filtered;
-    cout << "\t" << ((double)statsMultiObj->pareto_dominance_time) / CLOCKS_PER_SEC;
+    cout << "\t" << enumeration_stats->layer_coupling;
+    cout << "\t" << enumeration_stats->pareto_dominance_filtered;
+    cout << "\t" << ((double)enumeration_stats->pareto_dominance_time) / CLOCKS_PER_SEC;
     cout << "\t" << compilation_wall_s;
     cout << "\t" << pareto_enum_wall_s;
     cout << "\t" << total_wall_s_end_to_end;
@@ -852,7 +856,7 @@ int main(int argc, char *argv[])
                        method,
                        backend_name,
                        cpu_threads,
-                       statsMultiObj,
+                       enumeration_stats,
                        compilation_wall_s,
                        pareto_enum_wall_s,
                        total_wall_s,
@@ -864,7 +868,7 @@ int main(int argc, char *argv[])
     if (save_stats)
     {
         string stats_error;
-        if (!write_stats_jsonl(stats_out_path, options, statsMultiObj, stats_record, &stats_error))
+        if (!write_stats_jsonl(stats_out_path, options, enumeration_stats, run_summary, &stats_error))
         {
             cerr << "Warning - failed to save stats to '" << stats_out_path << "'";
             if (!stats_error.empty())
