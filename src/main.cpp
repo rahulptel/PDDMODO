@@ -180,56 +180,6 @@ static bool write_frontier_gzip_csv(const ParetoFrontier *frontier, const string
     return true;
 }
 
-static void print_perf_log(const string &input_path,
-                           const int problem_type,
-                           const int method,
-                           const string &backend_name,
-                           const int cpu_threads,
-                           const EnumerationStats *stats,
-                           const double wall_compile_s,
-                           const double wall_enumeration_s,
-                           const double total_wall_s,
-                           const double cpu_compile_s,
-                           const double cpu_enumeration_s,
-                           const bool postprocess_sort_applied)
-{
-    cerr << fixed << setprecision(6);
-    cerr << "[perf] input=" << input_path
-         << " problem_type=" << problem_type
-         << " method=" << method
-         << " backend=" << backend_name
-         << " cpu_threads=" << cpu_threads << '\n';
-    cerr << "[perf] wall_s compile=" << wall_compile_s
-         << " enum=" << wall_enumeration_s
-         << " total=" << total_wall_s
-         << " postprocess_sort=" << (postprocess_sort_applied ? "applied" : "skipped") << '\n';
-    cerr << "[perf] cpu_s compile=" << cpu_compile_s
-         << " enum=" << cpu_enumeration_s << '\n';
-    if (stats != NULL)
-    {
-        cerr << "[perf] phases_s expand_td=" << stats->wall_expand_td_s
-             << " expand_bu=" << stats->wall_expand_bu_s
-             << " recompute_td=" << stats->wall_recompute_td_s
-             << " recompute_bu=" << stats->wall_recompute_bu_s
-             << " dominance=" << stats->wall_dominance_s
-             << " cutset_sort=" << stats->wall_cutset_sort_s
-             << " cutset_convolution=" << stats->wall_cutset_convolution_s
-             << " cutset_partial_merge=" << stats->wall_cutset_partial_merge_s
-             << " pack_transfer=" << stats->wall_pack_transfer_s
-             << " join=" << stats->wall_join_s << '\n';
-        cerr << "[perf] counters layers_td=" << stats->cpu_layers_td
-             << " layers_bu=" << stats->cpu_layers_bu
-             << " nodes_expanded=" << stats->cpu_nodes_expanded
-             << " cutset_size=" << stats->cpu_cutset_size
-             << " work_candidates_total=" << stats->work_candidates_total
-             << " work_frontier_survivors_total=" << stats->work_frontier_survivors_total
-             << " work_frontier_peak_points=" << stats->work_frontier_peak_points
-             << " work_join_products_total=" << stats->work_join_products_total
-             << " dominance_filtered=" << stats->dominance_filtered_total
-             << " dominance_cpu_s=" << ((double)stats->cpu_ticks_dominance) / CLOCKS_PER_SEC << '\n';
-    }
-}
-
 static string json_escape(const string &value)
 {
     string escaped;
@@ -418,7 +368,6 @@ int main(int argc, char *argv[])
     const int cpu_threads = options.cpu_threads;
     const bool save_frontier = options.save_frontier;
     const string frontier_out_path = options.frontier_out_path;
-    const bool perf_log = options.perf_log;
     const bool save_stats = options.save_stats;
     const string stats_out_path = options.stats_out_path;
 
@@ -530,7 +479,7 @@ int main(int argc, char *argv[])
 
         // Solver-owned stats populated during frontier enumeration.
         EnumerationStats *enumeration_stats = new EnumerationStats;
-        enumeration_stats->cpu_perf_enabled = (backend == BACKEND_CPU) && (perf_log || save_stats);
+        enumeration_stats->cpu_perf_enabled = (backend == BACKEND_CPU) && save_stats;
         ParetoFrontier *pareto_frontier = NULL;
 
         if (method == 1) { // Top-down
@@ -615,24 +564,6 @@ int main(int argc, char *argv[])
         cout << "\t" << wall_total_end_to_end_s;
         cout << endl;
 
-        if (perf_log)
-        {
-            const double total_wall_s = wall_total_end_to_end_s;
-            const string backend_name = backend_to_string(backend);
-            print_perf_log(input_path,
-                           problem_type,
-                           method,
-                           backend_name,
-                           cpu_threads,
-                           enumeration_stats,
-                           compilation_wall_s,
-                           pareto_wall_enumeration_s,
-                           total_wall_s,
-                           ((double)compilation_tsp) / CLOCKS_PER_SEC,
-                           ((double)pareto_tsp_cpu) / CLOCKS_PER_SEC,
-                           true);
-        }
-
         if (save_stats)
         {
             string stats_error;
@@ -669,7 +600,7 @@ int main(int argc, char *argv[])
     // Initialize enumeration stats
     // Solver-owned stats populated during frontier enumeration.
     EnumerationStats *enumeration_stats = new EnumerationStats;
-    enumeration_stats->cpu_perf_enabled = (backend == BACKEND_CPU) && (perf_log || save_stats);
+    enumeration_stats->cpu_perf_enabled = (backend == BACKEND_CPU) && save_stats;
 
     // Compute pareto frontier based on methodology
     // cout << "\n\nComputing pareto frontier..." << endl;
@@ -819,24 +750,6 @@ int main(int argc, char *argv[])
     cout << "\t" << pareto_wall_enumeration_s;
     cout << "\t" << wall_total_end_to_end_s;
     cout << endl;
-
-    if (perf_log)
-    {
-        const double total_wall_s = wall_total_end_to_end_s;
-        const string backend_name = backend_to_string(backend);
-        print_perf_log(input_path,
-                       problem_type,
-                       method,
-                       backend_name,
-                       cpu_threads,
-                       enumeration_stats,
-                       compilation_wall_s,
-                       pareto_wall_enumeration_s,
-                       total_wall_s,
-                       timers.get_time(bdd_compilation_time),
-                       timers.get_time(pareto_time),
-                       true);
-    }
 
     if (save_stats)
     {

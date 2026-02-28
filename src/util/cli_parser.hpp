@@ -24,7 +24,6 @@ struct CliOptions
     int kernel_version;
     bool save_frontier;
     std::string frontier_out_path;
-    bool perf_log;
     bool save_stats;
     std::string stats_out_path;
 

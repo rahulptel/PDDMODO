@@ -20,7 +20,6 @@ CliOptions::CliOptions()
       cpu_threads(1),
       kernel_version(-1),
       save_frontier(false),
-      perf_log(false),
       save_stats(false)
 {
 }
@@ -151,7 +150,6 @@ void print_usage()
     cout << "\n";
     cout << "\t\t--save-frontier: save Pareto frontier to <input_stem>.frontier.csv.gz\n";
     cout << "\t\t--frontier-out <path>: save Pareto frontier to explicit gzip CSV path\n";
-    cout << "\t\t--perf-log: print aggregated CPU performance diagnostics to stderr\n";
     cout << "\t\t--save-stats: save one JSONL record with run statistics\n";
     cout << "\t\t--stats-out <path>: save JSONL statistics to explicit path\n";
     cout << "\t\toptional arguments can be provided in any order\n";
@@ -425,10 +423,6 @@ bool parse_cli_args(int argc, char *argv[], CliOptions *out, string *error)
                 return false;
             }
             opts.save_frontier = true;
-        }
-        else if (token == "--perf-log")
-        {
-            opts.perf_log = true;
         }
         else if (token == "--save-stats")
         {

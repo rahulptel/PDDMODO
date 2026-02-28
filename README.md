@@ -85,11 +85,6 @@ Stats saving options:
 - JSONL write mode is append (`app`): one line is appended per run.
 - If stats writing fails, the run exits with a nonzero status and prints an explicit error.
 
-Performance logging:
-- `--perf-log`: emit aggregated phase timings and counters to `stderr` (stdout format remains unchanged).
-- Logged wall-clock and CPU-time values are both reported.
-- Enumeration timing excludes final lexicographic sorting (sorting is treated as post-processing).
-
 Stdout format (always 3 lines):
 - line 1: number of Pareto solutions.
 - line 2: CPU total time (`cpu_compile_s + cpu_enumeration_s`) for backward compatibility.
