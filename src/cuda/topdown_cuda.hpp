@@ -86,6 +86,8 @@ bool expand_layer_cuda(
     thrust::device_vector<int>& d_next_offsets,
     thrust::device_vector<ObjType>& d_next_points,
     std::string* reason,
-    int kernel_version = 3);
+    int kernel_version = 3,
+    long long* total_candidates_out = NULL,
+    long long* total_next_out = NULL);
 
 #endif

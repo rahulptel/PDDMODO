@@ -5,6 +5,7 @@
 #include "coupled_cuda.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <ctime>
 #include <iostream>
 #include <vector>
@@ -549,8 +550,16 @@ bool expand_layer_cuda(
     thrust::device_vector<int>& d_next_offsets,
     thrust::device_vector<ObjType>& d_next_points,
     std::string* reason,
-    int kernel_version)
+    int kernel_version,
+    long long* total_candidates_out,
+    long long* total_next_out)
 {
+    if (total_candidates_out != NULL) {
+        *total_candidates_out = 0;
+    }
+    if (total_next_out != NULL) {
+        *total_next_out = 0;
+    }
     if (kernel_version < 1 || kernel_version > 3) {
         return set_reason(reason, "Invalid kernel_version (expected 1, 2, or 3)");
     }
@@ -578,6 +587,9 @@ bool expand_layer_cuda(
     const int lo = d_eo[num_edges - 1];
     const int lc = d_ec[num_edges - 1];
     const int total_cand = lo + lc;
+    if (total_candidates_out != NULL) {
+        *total_candidates_out = total_cand;
+    }
     d_eo[num_edges] = total_cand;
 
     if (total_cand == 0) {
@@ -671,6 +683,9 @@ bool expand_layer_cuda(
     thrust::device_vector<int> d_ap(total_cand, 0);
     thrust::exclusive_scan(d_alive.begin(), d_alive.end(), d_ap.begin());
     const int total_next = thrust::reduce(d_alive.begin(), d_alive.end(), 0);
+    if (total_next_out != NULL) {
+        *total_next_out = total_next;
+    }
 
     thrust::exclusive_scan(d_next_sizes.begin(), d_next_sizes.end(), d_next_offsets.begin());
     d_next_offsets[next_nodes] = total_next;
@@ -722,9 +737,6 @@ ParetoFrontier* coupled_cuda_enumerate(MDD* mdd,
                                        EnumerationStats* stats,
                                        std::string* reason,
                                        int kernel_version) {
-    using std::cout;
-    using std::endl;
-
     if (mdd == NULL) { set_reason(reason, "MDD is NULL"); return NULL; }
     if (mdd->num_layers <= 0) { set_reason(reason, "MDD has zero layers"); return NULL; }
     if (!coupled_cuda_available(reason)) return NULL;
@@ -736,6 +748,7 @@ ParetoFrontier* coupled_cuda_enumerate(MDD* mdd,
     // ----------------------------------------------------------
     // 1. Pack all MDD layers into flat GPU arrays
     // ----------------------------------------------------------
+    const auto pack_begin = std::chrono::steady_clock::now();
     t0 = clock();
     std::vector<PackedMDDLayer> packed(num_layers);
     for (int l = 0; l < num_layers; ++l) {
@@ -802,7 +815,9 @@ ParetoFrontier* coupled_cuda_enumerate(MDD* mdd,
         packed[l].in_arc_counts = h_in;
     }
     t1 = clock();
-    cout << "[CUDA] Packing: " << (double)(t1-t0)/CLOCKS_PER_SEC << "s (" << num_layers << " layers)" << endl;
+    if (stats != NULL) {
+        stats->wall_pack_transfer_s += std::chrono::duration_cast<std::chrono::duration<double> >(std::chrono::steady_clock::now() - pack_begin).count();
+    }
 
     // ----------------------------------------------------------
     // 2. Initialize top-down and bottom-up frontiers
@@ -848,6 +863,8 @@ ParetoFrontier* coupled_cuda_enumerate(MDD* mdd,
             const int nn = packed[layer_td].num_nodes;
             thrust::device_vector<int> d_ns, d_no;
             thrust::device_vector<ObjType> d_np;
+            long long layer_candidates = 0;
+            long long layer_survivors = 0;
 
             t0 = clock();
             if (!expand_layer_cuda(
@@ -857,17 +874,19 @@ ParetoFrontier* coupled_cuda_enumerate(MDD* mdd,
                     packed[layer_td].td_num_edges,
                     nn,
                     d_td_offsets, d_td_points,
-                    d_ns, d_no, d_np, reason, kernel_version))
+                    d_ns, d_no, d_np, reason, kernel_version,
+                    &layer_candidates, &layer_survivors))
                 return NULL;
             t1 = clock();
             double td_elapsed = (double)(t1-t0)/CLOCKS_PER_SEC;
             total_td_time += td_elapsed;
             ++td_iters;
-
-            int total_pts = thrust::reduce(d_ns.begin(), d_ns.end(), 0);
-            cout << "[CUDA] TD expand layer " << layer_td << ": "
-                 << nn << " nodes, " << packed[layer_td].td_num_edges << " edges, "
-                 << total_pts << " pts, " << td_elapsed << "s" << endl;
+            if (stats != NULL) {
+                stats->wall_expand_td_s += td_elapsed;
+                stats->work_candidates_total += layer_candidates;
+                stats->work_frontier_survivors_total += layer_survivors;
+                stats->work_frontier_peak_points = std::max(stats->work_frontier_peak_points, layer_survivors);
+            }
 
             d_td_sizes.swap(d_ns);
             d_td_offsets.swap(d_no);
@@ -881,6 +900,8 @@ ParetoFrontier* coupled_cuda_enumerate(MDD* mdd,
             const int nn = packed[layer_bu].num_nodes;
             thrust::device_vector<int> d_ns, d_no;
             thrust::device_vector<ObjType> d_np;
+            long long layer_candidates = 0;
+            long long layer_survivors = 0;
 
             t0 = clock();
             if (!expand_layer_cuda(
@@ -890,17 +911,19 @@ ParetoFrontier* coupled_cuda_enumerate(MDD* mdd,
                     packed[layer_bu].bu_num_edges,
                     nn,
                     d_bu_offsets, d_bu_points,
-                    d_ns, d_no, d_np, reason, kernel_version))
+                    d_ns, d_no, d_np, reason, kernel_version,
+                    &layer_candidates, &layer_survivors))
                 return NULL;
             t1 = clock();
             double bu_elapsed = (double)(t1-t0)/CLOCKS_PER_SEC;
             total_bu_time += bu_elapsed;
             ++bu_iters;
-
-            int total_pts = thrust::reduce(d_ns.begin(), d_ns.end(), 0);
-            cout << "[CUDA] BU expand layer " << layer_bu << ": "
-                 << nn << " nodes, " << packed[layer_bu].bu_num_edges << " edges, "
-                 << total_pts << " pts, " << bu_elapsed << "s" << endl;
+            if (stats != NULL) {
+                stats->wall_expand_bu_s += bu_elapsed;
+                stats->work_candidates_total += layer_candidates;
+                stats->work_frontier_survivors_total += layer_survivors;
+                stats->work_frontier_peak_points = std::max(stats->work_frontier_peak_points, layer_survivors);
+            }
 
             d_bu_sizes.swap(d_ns);
             d_bu_offsets.swap(d_no);
@@ -910,10 +933,6 @@ ParetoFrontier* coupled_cuda_enumerate(MDD* mdd,
             val_bu = 1.5 * compute_layer_value(d_bu_offsets, packed[layer_bu].in_arc_counts, nn);
         }
     }
-
-    cout << "[CUDA] Expansion done: TD " << td_iters << " iters (" << total_td_time
-         << "s), BU " << bu_iters << " iters (" << total_bu_time << "s)"
-         << ", cutset layer=" << layer_td << endl;
 
     if (stats != NULL) stats->layer_coupling = layer_td;
 
@@ -937,9 +956,9 @@ ParetoFrontier* coupled_cuda_enumerate(MDD* mdd,
         total_products += p;
         if (p > 0) ++nonzero_nodes;
     }
-    cout << "[CUDA] Cutset: " << cutset_nodes << " nodes (" << nonzero_nodes << " nonzero), "
-         << total_td_pts << " td pts, " << total_bu_pts << " bu pts, "
-         << total_products << " total products" << endl;
+    if (stats != NULL) {
+        stats->work_join_products_total += total_products;
+    }
 
     // Collect nonzero nodes sorted largest-first
     std::vector<int> nz_nodes;
@@ -989,6 +1008,9 @@ ParetoFrontier* coupled_cuda_enumerate(MDD* mdd,
             h_bprod_off[j+1] = h_bprod_off[j] + h_btd_sz[j] * h_bbu_sz[j];
         }
         const int tbp = h_bprod_off[bc];
+        if (stats != NULL) {
+            stats->work_candidates_total += tbp;
+        }
 
         // Upload batch metadata
         thrust::device_vector<int> d_btd_off(h_btd_off.begin(), h_btd_off.end());
@@ -1083,20 +1105,18 @@ ParetoFrontier* coupled_cuda_enumerate(MDD* mdd,
             frontier_size = new_total;
         }
         time_update += (double)(clock()-ua)/CLOCKS_PER_SEC;
+        if (stats != NULL) {
+            stats->work_frontier_survivors_total += batch_surv;
+            stats->work_frontier_peak_points = std::max(stats->work_frontier_peak_points, static_cast<long long>(frontier_size));
+        }
 
         ++num_batches;
-        if (num_batches <= 5 || num_batches % 20 == 0)
-            cout << "[CUDA] Batch " << num_batches << ": " << bc << " nodes, "
-                 << tbp << " prod, " << batch_surv << " filt-surv, "
-                 << " frontier=" << frontier_size << endl;
         bidx = bend;
     }
     t1 = clock();
-    cout << "[CUDA] Conv batches: " << (double)(t1-t0)/CLOCKS_PER_SEC << "s"
-         << " (" << num_batches << " batches)"
-         << " cart=" << time_cart << "s filt=" << time_filt
-         << "s update=" << time_update << "s"
-         << " raw_frontier=" << frontier_size << endl;
+    if (stats != NULL) {
+        stats->wall_join_s += (double)(t1-t0)/CLOCKS_PER_SEC;
+    }
 
     // ---- Final global dominance pass on accumulated frontier ----
     clock_t fg0 = clock();
@@ -1124,8 +1144,10 @@ ParetoFrontier* coupled_cuda_enumerate(MDD* mdd,
         }
     }
     clock_t fg1 = clock();
-    cout << "[CUDA] Final dominance: " << (double)(fg1-fg0)/CLOCKS_PER_SEC << "s"
-         << " frontier=" << frontier_size << " sols" << endl;
+    if (stats != NULL) {
+        stats->wall_join_s += (double)(fg1-fg0)/CLOCKS_PER_SEC;
+        stats->work_frontier_peak_points = std::max(stats->work_frontier_peak_points, static_cast<long long>(frontier_size));
+    }
 
     // Copy final frontier to host
     ParetoFrontier* frontier = new ParetoFrontier;

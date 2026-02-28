@@ -44,14 +44,16 @@ struct RunSummaryStats
     long original_num_nodes;
     long reduced_num_nodes;
     int layer_coupling;
-    int pareto_dominance_filtered;
-    double pareto_dominance_cpu_s;
-    double compile_cpu_s;
-    double enum_cpu_s;
-    double total_cpu_s;
-    double compile_wall_s;
-    double enum_wall_s;
-    double total_wall_s_end_to_end;
+    int dominance_filtered_total;
+    double cpu_dominance_s;
+    double cpu_compile_s;
+    double cpu_enumeration_s;
+    double cpu_total_s;
+    double wall_compile_s;
+    double wall_enumeration_s;
+    double wall_total_end_to_end_s;
+    string status_state;
+    string status_error_message;
 
     RunSummaryStats()
         : is_tsp_branch(false),
@@ -62,14 +64,16 @@ struct RunSummaryStats
           original_num_nodes(-1),
           reduced_num_nodes(-1),
           layer_coupling(0),
-          pareto_dominance_filtered(0),
-          pareto_dominance_cpu_s(0.0),
-          compile_cpu_s(0.0),
-          enum_cpu_s(0.0),
-          total_cpu_s(0.0),
-          compile_wall_s(0.0),
-          enum_wall_s(0.0),
-          total_wall_s_end_to_end(0.0)
+          dominance_filtered_total(0),
+          cpu_dominance_s(0.0),
+          cpu_compile_s(0.0),
+          cpu_enumeration_s(0.0),
+          cpu_total_s(0.0),
+          wall_compile_s(0.0),
+          wall_enumeration_s(0.0),
+          wall_total_end_to_end_s(0.0),
+          status_state("ok"),
+          status_error_message("")
     {
     }
 };
@@ -182,11 +186,11 @@ static void print_perf_log(const string &input_path,
                            const string &backend_name,
                            const int cpu_threads,
                            const EnumerationStats *stats,
-                           const double compile_wall_s,
-                           const double enum_wall_s,
+                           const double wall_compile_s,
+                           const double wall_enumeration_s,
                            const double total_wall_s,
-                           const double compile_cpu_s,
-                           const double enum_cpu_s,
+                           const double cpu_compile_s,
+                           const double cpu_enumeration_s,
                            const bool postprocess_sort_applied)
 {
     cerr << fixed << setprecision(6);
@@ -195,28 +199,34 @@ static void print_perf_log(const string &input_path,
          << " method=" << method
          << " backend=" << backend_name
          << " cpu_threads=" << cpu_threads << '\n';
-    cerr << "[perf] wall_s compile=" << compile_wall_s
-         << " enum=" << enum_wall_s
+    cerr << "[perf] wall_s compile=" << wall_compile_s
+         << " enum=" << wall_enumeration_s
          << " total=" << total_wall_s
          << " postprocess_sort=" << (postprocess_sort_applied ? "applied" : "skipped") << '\n';
-    cerr << "[perf] cpu_s compile=" << compile_cpu_s
-         << " enum=" << enum_cpu_s << '\n';
+    cerr << "[perf] cpu_s compile=" << cpu_compile_s
+         << " enum=" << cpu_enumeration_s << '\n';
     if (stats != NULL)
     {
-        cerr << "[perf] phases_s expand_td=" << stats->cpu_expand_td_wall_s
-             << " expand_bu=" << stats->cpu_expand_bu_wall_s
-             << " recompute_td=" << stats->cpu_recompute_td_wall_s
-             << " recompute_bu=" << stats->cpu_recompute_bu_wall_s
-             << " dominance=" << stats->cpu_dominance_wall_s
-             << " cutset_sort=" << stats->cpu_cutset_sort_wall_s
-             << " cutset_convolution=" << stats->cpu_cutset_convolution_wall_s
-             << " cutset_partial_merge=" << stats->cpu_cutset_partial_merge_wall_s << '\n';
+        cerr << "[perf] phases_s expand_td=" << stats->wall_expand_td_s
+             << " expand_bu=" << stats->wall_expand_bu_s
+             << " recompute_td=" << stats->wall_recompute_td_s
+             << " recompute_bu=" << stats->wall_recompute_bu_s
+             << " dominance=" << stats->wall_dominance_s
+             << " cutset_sort=" << stats->wall_cutset_sort_s
+             << " cutset_convolution=" << stats->wall_cutset_convolution_s
+             << " cutset_partial_merge=" << stats->wall_cutset_partial_merge_s
+             << " pack_transfer=" << stats->wall_pack_transfer_s
+             << " join=" << stats->wall_join_s << '\n';
         cerr << "[perf] counters layers_td=" << stats->cpu_layers_td
              << " layers_bu=" << stats->cpu_layers_bu
              << " nodes_expanded=" << stats->cpu_nodes_expanded
              << " cutset_size=" << stats->cpu_cutset_size
-             << " dominance_filtered=" << stats->pareto_dominance_filtered
-             << " dominance_cpu_s=" << ((double)stats->pareto_dominance_time) / CLOCKS_PER_SEC << '\n';
+             << " work_candidates_total=" << stats->work_candidates_total
+             << " work_frontier_survivors_total=" << stats->work_frontier_survivors_total
+             << " work_frontier_peak_points=" << stats->work_frontier_peak_points
+             << " work_join_products_total=" << stats->work_join_products_total
+             << " dominance_filtered=" << stats->dominance_filtered_total
+             << " dominance_cpu_s=" << ((double)stats->cpu_ticks_dominance) / CLOCKS_PER_SEC << '\n';
     }
 }
 
@@ -274,7 +284,7 @@ static bool write_stats_jsonl(const string &out_path,
                               const RunSummaryStats &record,
                               string *error)
 {
-    ofstream out(out_path.c_str(), ios::out | ios::trunc);
+    ofstream out(out_path.c_str(), ios::out | ios::app);
     if (!out.is_open())
     {
         if (error != NULL)
@@ -285,80 +295,89 @@ static bool write_stats_jsonl(const string &out_path,
     }
 
     out << fixed << setprecision(6);
-    bool first = true;
-    auto key_prefix = [&]() {
-        if (!first)
-        {
-            out << ',';
-        }
-        first = false;
-    };
+    const double cpu_dominance_s = stats != NULL ? ((double)stats->cpu_ticks_dominance) / CLOCKS_PER_SEC : record.cpu_dominance_s;
+    const int layer_coupling = stats != NULL ? stats->layer_coupling : record.layer_coupling;
+    const int dominance_filtered_total = stats != NULL ? stats->dominance_filtered_total : record.dominance_filtered_total;
+    const long long work_candidates_total = stats != NULL ? stats->work_candidates_total : 0;
+    const long long work_frontier_survivors_total = stats != NULL ? stats->work_frontier_survivors_total : 0;
+    const long long work_frontier_peak_points = stats != NULL ? stats->work_frontier_peak_points : 0;
+    const long long work_join_products_total = stats != NULL ? stats->work_join_products_total : 0;
 
-    auto write_string = [&](const string &key, const string &value) {
-        key_prefix();
-        out << "\"" << key << "\":\"" << json_escape(value) << "\"";
-    };
-    auto write_bool = [&](const string &key, const bool value) {
-        key_prefix();
-        out << "\"" << key << "\":" << (value ? "true" : "false");
-    };
-    auto write_int = [&](const string &key, const long long value) {
-        key_prefix();
-        out << "\"" << key << "\":" << value;
-    };
-    auto write_double = [&](const string &key, const double value) {
-        key_prefix();
-        out << "\"" << key << "\":" << value;
-    };
+    out << "{";
+    out << "\"schema_version\":1,";
+    out << "\"identity\":{";
+    out << "\"input_path\":\"" << json_escape(opts.input_path) << "\",";
+    out << "\"problem_type\":" << opts.problem_type << ",";
+    out << "\"method\":" << opts.method << ",";
+    out << "\"dominance\":" << opts.dominance << ",";
+    out << "\"backend\":\"" << backend_to_string(opts.backend) << "\",";
+    out << "\"cpu_threads\":" << opts.cpu_threads << ",";
+    out << "\"kernel_version\":" << opts.kernel_version;
+    out << "},";
 
-    const double dominance_cpu_s = stats != NULL ? ((double)stats->pareto_dominance_time) / CLOCKS_PER_SEC : 0.0;
-    const int layer_coupling = stats != NULL ? stats->layer_coupling : 0;
-    const int dominance_filtered = stats != NULL ? stats->pareto_dominance_filtered : 0;
+    out << "\"outputs\":{";
+    out << "\"num_solutions\":" << record.num_solutions << ",";
+    out << "\"save_frontier\":" << (opts.save_frontier ? "true" : "false") << ",";
+    out << "\"frontier_out_path\":\"" << json_escape(opts.frontier_out_path) << "\"";
+    out << "},";
 
-    out << '{';
-    write_string("input_path", opts.input_path);
-    write_int("problem_type", opts.problem_type);
-    write_int("method", opts.method);
-    write_int("dominance", opts.dominance);
-    write_string("backend", backend_to_string(opts.backend));
-    write_int("cpu_threads", opts.cpu_threads);
-    write_int("kernel_version", opts.kernel_version);
-    write_bool("save_frontier", opts.save_frontier);
-    write_string("frontier_out_path", opts.frontier_out_path);
-    write_bool("perf_log", opts.perf_log);
-    write_bool("save_stats", opts.save_stats);
-    write_string("stats_out_path", opts.stats_out_path);
-    write_bool("is_tsp_branch", record.is_tsp_branch);
-    write_bool("postprocess_sort_applied", record.postprocess_sort_applied);
+    out << "\"timing\":{";
+    out << "\"cpu\":{";
+    out << "\"cpu_compile_s\":" << record.cpu_compile_s << ",";
+    out << "\"cpu_enumeration_s\":" << record.cpu_enumeration_s << ",";
+    out << "\"cpu_total_s\":" << record.cpu_total_s << ",";
+    out << "\"cpu_dominance_s\":" << cpu_dominance_s;
+    out << "},";
+    out << "\"wall\":{";
+    out << "\"wall_compile_s\":" << record.wall_compile_s << ",";
+    out << "\"wall_enumeration_s\":" << record.wall_enumeration_s << ",";
+    out << "\"wall_total_end_to_end_s\":" << record.wall_total_end_to_end_s;
+    out << "}";
+    out << "},";
 
-    write_int("num_solutions", record.num_solutions);
-    write_int("original_width", record.original_width);
-    write_int("reduced_width", record.reduced_width);
-    write_int("original_num_nodes", record.original_num_nodes);
-    write_int("reduced_num_nodes", record.reduced_num_nodes);
-    write_int("layer_coupling", stats != NULL ? layer_coupling : record.layer_coupling);
-    write_int("pareto_dominance_filtered", stats != NULL ? dominance_filtered : record.pareto_dominance_filtered);
+    out << "\"work\":{";
+    out << "\"work_candidates_total\":" << work_candidates_total << ",";
+    out << "\"work_frontier_survivors_total\":" << work_frontier_survivors_total << ",";
+    out << "\"work_frontier_peak_points\":" << work_frontier_peak_points << ",";
+    out << "\"work_join_products_total\":" << work_join_products_total;
+    out << "},";
 
-    write_double("compile_cpu_s", record.compile_cpu_s);
-    write_double("enum_cpu_s", record.enum_cpu_s);
-    write_double("total_cpu_s", record.total_cpu_s);
-    write_double("compile_wall_s", record.compile_wall_s);
-    write_double("enum_wall_s", record.enum_wall_s);
-    write_double("total_wall_s_end_to_end", record.total_wall_s_end_to_end);
-    write_double("pareto_dominance_cpu_s", stats != NULL ? dominance_cpu_s : record.pareto_dominance_cpu_s);
+    out << "\"dominance\":{";
+    out << "\"dominance_filtered_total\":" << dominance_filtered_total << ",";
+    out << "\"cpu_ticks_dominance\":" << (stats != NULL ? stats->cpu_ticks_dominance : 0);
+    out << "},";
 
-    write_double("cpu_expand_td_wall_s", stats != NULL ? stats->cpu_expand_td_wall_s : 0.0);
-    write_double("cpu_expand_bu_wall_s", stats != NULL ? stats->cpu_expand_bu_wall_s : 0.0);
-    write_double("cpu_recompute_td_wall_s", stats != NULL ? stats->cpu_recompute_td_wall_s : 0.0);
-    write_double("cpu_recompute_bu_wall_s", stats != NULL ? stats->cpu_recompute_bu_wall_s : 0.0);
-    write_double("cpu_dominance_wall_s", stats != NULL ? stats->cpu_dominance_wall_s : 0.0);
-    write_double("cpu_cutset_sort_wall_s", stats != NULL ? stats->cpu_cutset_sort_wall_s : 0.0);
-    write_double("cpu_cutset_convolution_wall_s", stats != NULL ? stats->cpu_cutset_convolution_wall_s : 0.0);
-    write_double("cpu_cutset_partial_merge_wall_s", stats != NULL ? stats->cpu_cutset_partial_merge_wall_s : 0.0);
-    write_int("cpu_layers_td", stats != NULL ? stats->cpu_layers_td : 0);
-    write_int("cpu_layers_bu", stats != NULL ? stats->cpu_layers_bu : 0);
-    write_int("cpu_nodes_expanded", stats != NULL ? stats->cpu_nodes_expanded : 0);
-    write_int("cpu_cutset_size", stats != NULL ? stats->cpu_cutset_size : 0);
+    out << "\"structure\":{";
+    out << "\"is_tsp_branch\":" << (record.is_tsp_branch ? "true" : "false") << ",";
+    out << "\"postprocess_sort_applied\":" << (record.postprocess_sort_applied ? "true" : "false") << ",";
+    out << "\"original_width\":" << record.original_width << ",";
+    out << "\"reduced_width\":" << record.reduced_width << ",";
+    out << "\"original_num_nodes\":" << record.original_num_nodes << ",";
+    out << "\"reduced_num_nodes\":" << record.reduced_num_nodes << ",";
+    out << "\"layer_coupling\":" << layer_coupling;
+    out << "},";
+
+    out << "\"perf\":{";
+    out << "\"wall_expand_td_s\":" << (stats != NULL ? stats->wall_expand_td_s : 0.0) << ",";
+    out << "\"wall_expand_bu_s\":" << (stats != NULL ? stats->wall_expand_bu_s : 0.0) << ",";
+    out << "\"wall_recompute_td_s\":" << (stats != NULL ? stats->wall_recompute_td_s : 0.0) << ",";
+    out << "\"wall_recompute_bu_s\":" << (stats != NULL ? stats->wall_recompute_bu_s : 0.0) << ",";
+    out << "\"wall_dominance_s\":" << (stats != NULL ? stats->wall_dominance_s : 0.0) << ",";
+    out << "\"wall_cutset_sort_s\":" << (stats != NULL ? stats->wall_cutset_sort_s : 0.0) << ",";
+    out << "\"wall_cutset_convolution_s\":" << (stats != NULL ? stats->wall_cutset_convolution_s : 0.0) << ",";
+    out << "\"wall_cutset_partial_merge_s\":" << (stats != NULL ? stats->wall_cutset_partial_merge_s : 0.0) << ",";
+    out << "\"wall_pack_transfer_s\":" << (stats != NULL ? stats->wall_pack_transfer_s : 0.0) << ",";
+    out << "\"wall_join_s\":" << (stats != NULL ? stats->wall_join_s : 0.0) << ",";
+    out << "\"cpu_layers_td\":" << (stats != NULL ? stats->cpu_layers_td : 0) << ",";
+    out << "\"cpu_layers_bu\":" << (stats != NULL ? stats->cpu_layers_bu : 0) << ",";
+    out << "\"cpu_nodes_expanded\":" << (stats != NULL ? stats->cpu_nodes_expanded : 0) << ",";
+    out << "\"cpu_cutset_size\":" << (stats != NULL ? stats->cpu_cutset_size : 0);
+    out << "},";
+
+    out << "\"status\":{";
+    out << "\"status_state\":\"" << json_escape(record.status_state) << "\",";
+    out << "\"status_error_message\":\"" << json_escape(record.status_error_message) << "\"";
+    out << "}";
     out << "}\n";
 
     if (!out.good())
@@ -406,7 +425,7 @@ int main(int argc, char *argv[])
     typedef std::chrono::steady_clock WallClock;
     const WallClock::time_point run_wall_begin = WallClock::now();
     double compilation_wall_s = 0.0;
-    double pareto_enum_wall_s = 0.0;
+    double pareto_wall_enumeration_s = 0.0;
 
     // For statistical analysis
     Stats timers;
@@ -545,7 +564,7 @@ int main(int argc, char *argv[])
             exit(1);
         }
         pareto_tsp_cpu = clock() - pareto_tsp_cpu;
-        pareto_enum_wall_s = std::chrono::duration_cast<std::chrono::duration<double> >(WallClock::now() - pareto_tsp_wall_begin).count();
+        pareto_wall_enumeration_s = std::chrono::duration_cast<std::chrono::duration<double> >(WallClock::now() - pareto_tsp_wall_begin).count();
 
         assert(pareto_frontier != NULL);
         pareto_frontier->sort_lexicographic_ascending();
@@ -565,7 +584,7 @@ int main(int argc, char *argv[])
             }
         }
 
-        const double total_wall_s_end_to_end =
+        const double wall_total_end_to_end_s =
             std::chrono::duration_cast<std::chrono::duration<double> >(WallClock::now() - run_wall_begin).count();
 
         // Run-level summary assembled in main for reporting/output only.
@@ -578,27 +597,27 @@ int main(int argc, char *argv[])
         run_summary.original_num_nodes = -1;
         run_summary.reduced_num_nodes = -1;
         run_summary.layer_coupling = enumeration_stats->layer_coupling;
-        run_summary.pareto_dominance_filtered = enumeration_stats->pareto_dominance_filtered;
-        run_summary.pareto_dominance_cpu_s = ((double)enumeration_stats->pareto_dominance_time) / CLOCKS_PER_SEC;
-        run_summary.compile_cpu_s = ((double)compilation_tsp) / CLOCKS_PER_SEC;
-        run_summary.enum_cpu_s = ((double)pareto_tsp_cpu) / CLOCKS_PER_SEC;
-        run_summary.total_cpu_s = run_summary.compile_cpu_s + run_summary.enum_cpu_s;
-        run_summary.compile_wall_s = compilation_wall_s;
-        run_summary.enum_wall_s = pareto_enum_wall_s;
-        run_summary.total_wall_s_end_to_end = total_wall_s_end_to_end;
+        run_summary.dominance_filtered_total = enumeration_stats->dominance_filtered_total;
+        run_summary.cpu_dominance_s = ((double)enumeration_stats->cpu_ticks_dominance) / CLOCKS_PER_SEC;
+        run_summary.cpu_compile_s = ((double)compilation_tsp) / CLOCKS_PER_SEC;
+        run_summary.cpu_enumeration_s = ((double)pareto_tsp_cpu) / CLOCKS_PER_SEC;
+        run_summary.cpu_total_s = run_summary.cpu_compile_s + run_summary.cpu_enumeration_s;
+        run_summary.wall_compile_s = compilation_wall_s;
+        run_summary.wall_enumeration_s = pareto_wall_enumeration_s;
+        run_summary.wall_total_end_to_end_s = wall_total_end_to_end_s;
 
         cout << pareto_frontier->get_num_sols() << endl;
         cout << (double)(compilation_tsp + pareto_tsp_cpu) / CLOCKS_PER_SEC << endl;
         cout << (double)compilation_tsp / CLOCKS_PER_SEC;
-        cout << "\t" << pareto_tsp_cpu / CLOCKS_PER_SEC;
+        cout << "\t" << ((double)pareto_tsp_cpu) / CLOCKS_PER_SEC;
         cout << "\t" << compilation_wall_s;
-        cout << "\t" << pareto_enum_wall_s;
-        cout << "\t" << total_wall_s_end_to_end;
+        cout << "\t" << pareto_wall_enumeration_s;
+        cout << "\t" << wall_total_end_to_end_s;
         cout << endl;
 
         if (perf_log)
         {
-            const double total_wall_s = total_wall_s_end_to_end;
+            const double total_wall_s = wall_total_end_to_end_s;
             const string backend_name = backend_to_string(backend);
             print_perf_log(input_path,
                            problem_type,
@@ -607,7 +626,7 @@ int main(int argc, char *argv[])
                            cpu_threads,
                            enumeration_stats,
                            compilation_wall_s,
-                           pareto_enum_wall_s,
+                           pareto_wall_enumeration_s,
                            total_wall_s,
                            ((double)compilation_tsp) / CLOCKS_PER_SEC,
                            ((double)pareto_tsp_cpu) / CLOCKS_PER_SEC,
@@ -619,12 +638,13 @@ int main(int argc, char *argv[])
             string stats_error;
             if (!write_stats_jsonl(stats_out_path, options, enumeration_stats, run_summary, &stats_error))
             {
-                cerr << "Warning - failed to save stats to '" << stats_out_path << "'";
+                cerr << "Error - failed to save stats to '" << stats_out_path << "'";
                 if (!stats_error.empty())
                 {
                     cerr << ": " << stats_error;
                 }
                 cerr << '\n';
+                exit(1);
             }
         }
 
@@ -712,7 +732,7 @@ int main(int argc, char *argv[])
         exit(1);
     }
     timers.end_timer(pareto_time);
-    pareto_enum_wall_s = std::chrono::duration_cast<std::chrono::duration<double> >(WallClock::now() - pareto_wall_begin).count();
+    pareto_wall_enumeration_s = std::chrono::duration_cast<std::chrono::duration<double> >(WallClock::now() - pareto_wall_begin).count();
 
     pareto_frontier->sort_lexicographic_ascending();
 
@@ -759,7 +779,7 @@ int main(int argc, char *argv[])
     // stats << endl;
     // stats.close();
 
-    const double total_wall_s_end_to_end =
+    const double wall_total_end_to_end_s =
         std::chrono::duration_cast<std::chrono::duration<double> >(WallClock::now() - run_wall_begin).count();
 
     // Run-level summary assembled in main for reporting/output only.
@@ -772,14 +792,14 @@ int main(int argc, char *argv[])
     run_summary.original_num_nodes = original_num_nodes;
     run_summary.reduced_num_nodes = reduced_num_nodes;
     run_summary.layer_coupling = enumeration_stats->layer_coupling;
-    run_summary.pareto_dominance_filtered = enumeration_stats->pareto_dominance_filtered;
-    run_summary.pareto_dominance_cpu_s = ((double)enumeration_stats->pareto_dominance_time) / CLOCKS_PER_SEC;
-    run_summary.compile_cpu_s = timers.get_time(bdd_compilation_time);
-    run_summary.enum_cpu_s = timers.get_time(pareto_time);
-    run_summary.total_cpu_s = run_summary.compile_cpu_s + run_summary.enum_cpu_s;
-    run_summary.compile_wall_s = compilation_wall_s;
-    run_summary.enum_wall_s = pareto_enum_wall_s;
-    run_summary.total_wall_s_end_to_end = total_wall_s_end_to_end;
+    run_summary.dominance_filtered_total = enumeration_stats->dominance_filtered_total;
+    run_summary.cpu_dominance_s = ((double)enumeration_stats->cpu_ticks_dominance) / CLOCKS_PER_SEC;
+    run_summary.cpu_compile_s = timers.get_time(bdd_compilation_time);
+    run_summary.cpu_enumeration_s = timers.get_time(pareto_time);
+    run_summary.cpu_total_s = run_summary.cpu_compile_s + run_summary.cpu_enumeration_s;
+    run_summary.wall_compile_s = compilation_wall_s;
+    run_summary.wall_enumeration_s = pareto_wall_enumeration_s;
+    run_summary.wall_total_end_to_end_s = wall_total_end_to_end_s;
 
     cout << pareto_frontier->get_num_sols() << endl;
     cout << (timers.get_time(bdd_compilation_time) + timers.get_time(pareto_time)) << endl;
@@ -793,16 +813,16 @@ int main(int argc, char *argv[])
     cout << "\t" << timers.get_time(bdd_compilation_time);
     cout << "\t" << timers.get_time(pareto_time);
     cout << "\t" << enumeration_stats->layer_coupling;
-    cout << "\t" << enumeration_stats->pareto_dominance_filtered;
-    cout << "\t" << ((double)enumeration_stats->pareto_dominance_time) / CLOCKS_PER_SEC;
+    cout << "\t" << enumeration_stats->dominance_filtered_total;
+    cout << "\t" << ((double)enumeration_stats->cpu_ticks_dominance) / CLOCKS_PER_SEC;
     cout << "\t" << compilation_wall_s;
-    cout << "\t" << pareto_enum_wall_s;
-    cout << "\t" << total_wall_s_end_to_end;
+    cout << "\t" << pareto_wall_enumeration_s;
+    cout << "\t" << wall_total_end_to_end_s;
     cout << endl;
 
     if (perf_log)
     {
-        const double total_wall_s = total_wall_s_end_to_end;
+        const double total_wall_s = wall_total_end_to_end_s;
         const string backend_name = backend_to_string(backend);
         print_perf_log(input_path,
                        problem_type,
@@ -811,7 +831,7 @@ int main(int argc, char *argv[])
                        cpu_threads,
                        enumeration_stats,
                        compilation_wall_s,
-                       pareto_enum_wall_s,
+                       pareto_wall_enumeration_s,
                        total_wall_s,
                        timers.get_time(bdd_compilation_time),
                        timers.get_time(pareto_time),
@@ -823,12 +843,13 @@ int main(int argc, char *argv[])
         string stats_error;
         if (!write_stats_jsonl(stats_out_path, options, enumeration_stats, run_summary, &stats_error))
         {
-            cerr << "Warning - failed to save stats to '" << stats_out_path << "'";
+            cerr << "Error - failed to save stats to '" << stats_out_path << "'";
             if (!stats_error.empty())
             {
                 cerr << ": " << stats_error;
             }
             cerr << '\n';
+            exit(1);
         }
     }
 

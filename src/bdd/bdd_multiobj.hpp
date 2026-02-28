@@ -19,22 +19,30 @@
 //
 struct EnumerationStats {
     // Time spent in pareto dominance filtering
-    clock_t pareto_dominance_time;
+    clock_t cpu_ticks_dominance;
     // Solutions filtered by pareto dominance
-    int pareto_dominance_filtered;
+    int dominance_filtered_total;
     // Layer where coupling happened
     int layer_coupling;
     // Enable lightweight CPU performance aggregation
     bool cpu_perf_enabled;
     // Aggregated wall times (seconds) for CPU phases
-    double cpu_expand_td_wall_s;
-    double cpu_expand_bu_wall_s;
-    double cpu_recompute_td_wall_s;
-    double cpu_recompute_bu_wall_s;
-    double cpu_dominance_wall_s;
-    double cpu_cutset_sort_wall_s;
-    double cpu_cutset_convolution_wall_s;
-    double cpu_cutset_partial_merge_wall_s;
+    double wall_expand_td_s;
+    double wall_expand_bu_s;
+    double wall_recompute_td_s;
+    double wall_recompute_bu_s;
+    double wall_dominance_s;
+    double wall_cutset_sort_s;
+    double wall_cutset_convolution_s;
+    double wall_cutset_partial_merge_s;
+    // Aggregated wall times (seconds) for GPU packing and join phases
+    double wall_pack_transfer_s;
+    double wall_join_s;
+    // Method-agnostic work counters
+    long long work_candidates_total;
+    long long work_frontier_survivors_total;
+    long long work_frontier_peak_points;
+    long long work_join_products_total;
     // Aggregated counters for CPU phases
     int cpu_layers_td;
     int cpu_layers_bu;
@@ -43,18 +51,24 @@ struct EnumerationStats {
 
     // Constructor
     EnumerationStats() 
-    : pareto_dominance_time(0),
-      pareto_dominance_filtered(0),
+    : cpu_ticks_dominance(0),
+      dominance_filtered_total(0),
       layer_coupling(0),
       cpu_perf_enabled(false),
-      cpu_expand_td_wall_s(0.0),
-      cpu_expand_bu_wall_s(0.0),
-      cpu_recompute_td_wall_s(0.0),
-      cpu_recompute_bu_wall_s(0.0),
-      cpu_dominance_wall_s(0.0),
-      cpu_cutset_sort_wall_s(0.0),
-      cpu_cutset_convolution_wall_s(0.0),
-      cpu_cutset_partial_merge_wall_s(0.0),
+      wall_expand_td_s(0.0),
+      wall_expand_bu_s(0.0),
+      wall_recompute_td_s(0.0),
+      wall_recompute_bu_s(0.0),
+      wall_dominance_s(0.0),
+      wall_cutset_sort_s(0.0),
+      wall_cutset_convolution_s(0.0),
+      wall_cutset_partial_merge_s(0.0),
+      wall_pack_transfer_s(0.0),
+      wall_join_s(0.0),
+      work_candidates_total(0),
+      work_frontier_survivors_total(0),
+      work_frontier_peak_points(0),
+      work_join_products_total(0),
       cpu_layers_td(0),
       cpu_layers_bu(0),
       cpu_nodes_expanded(0),

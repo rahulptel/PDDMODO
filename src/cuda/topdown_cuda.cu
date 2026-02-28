@@ -5,6 +5,7 @@
 #include "topdown_cuda.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <ctime>
 #include <iostream>
 #include <vector>
@@ -657,7 +658,7 @@ inline bool apply_knapsack_state_dominance_cuda(BDD* bdd,
     ctx->next_points->swap(d_filtered_points);
 
     if (stats != NULL && old_total > new_total) {
-        stats->pareto_dominance_filtered += old_total - new_total;
+        stats->dominance_filtered_total += old_total - new_total;
     }
     return true;
 }
@@ -679,7 +680,6 @@ void BDDMultiObj::filter_dominance_cuda(BDD* bdd,
 
     LayerDominanceContext* ctx = g_layer_dom_ctx;
     if (ctx != NULL && ctx->warned_non_knapsack != NULL && !*(ctx->warned_non_knapsack)) {
-        cout << "Warning: CUDA state-dominance filtering is only implemented for knapsack (problem_type=1); skipping dominance filter." << endl;
         *(ctx->warned_non_knapsack) = true;
     }
 }
@@ -747,6 +747,7 @@ ParetoFrontier* topdown_cuda_enumerate(BDD* bdd,
     const int first_arc_type = maximization ? 1 : 0;
     const int second_arc_type = maximization ? 0 : 1;
     const bool pack_knapsack_meta = (problem_type == 1 && dominance_strategy > 0);
+    const auto pack_begin = std::chrono::steady_clock::now();
 
     for (int l = 1; l < bdd->num_layers; ++l) {
         const int next_nodes = bdd->layers[l].size();
@@ -827,6 +828,9 @@ ParetoFrontier* topdown_cuda_enumerate(BDD* bdd,
             packed_layers[l].single_parent_arc = h_parent_arc;
         }
     }
+    if (stats != NULL) {
+        stats->wall_pack_transfer_s += std::chrono::duration_cast<std::chrono::duration<double> >(std::chrono::steady_clock::now() - pack_begin).count();
+    }
 
     thrust::host_vector<int> h_prev_sizes(root_nodes, 0);
     h_prev_sizes[root_idx] = 1;
@@ -840,8 +844,10 @@ ParetoFrontier* topdown_cuda_enumerate(BDD* bdd,
     bool warned_non_knapsack_dominance = false;
 
     for (int l = 1; l < bdd->num_layers; ++l) {
+        const auto layer_begin = std::chrono::steady_clock::now();
         const int prev_nodes = bdd->layers[l - 1].size();
         const int next_nodes = bdd->layers[l].size();
+        long long layer_candidates = 0;
         if (d_prev_offsets.size() != static_cast<size_t>(prev_nodes + 1)) {
             set_reason(reason, "Previous offsets size does not match layer size");
             return NULL;
@@ -870,6 +876,7 @@ ParetoFrontier* topdown_cuda_enumerate(BDD* bdd,
             const int last_offset = d_edge_offsets[num_edges - 1];
             const int last_count = d_edge_counts[num_edges - 1];
             const int total_candidates = last_offset + last_count;
+            layer_candidates = total_candidates;
             d_edge_offsets[num_edges] = total_candidates;
 
             if (total_candidates > 0) {
@@ -1005,13 +1012,20 @@ ParetoFrontier* topdown_cuda_enumerate(BDD* bdd,
             clock_t init = clock();
             BDDMultiObj::filter_dominance_cuda(bdd, l, problem_type, dominance_strategy, stats);
             if (stats != NULL) {
-                stats->pareto_dominance_time += clock() - init;
+                stats->cpu_ticks_dominance += clock() - init;
             }
             g_layer_dom_ctx = NULL;
 
             if (dom_ctx.failed) {
                 return NULL;
             }
+        }
+        if (stats != NULL) {
+            const long long layer_survivors = d_next_points.size() / NOBJS;
+            stats->work_candidates_total += layer_candidates;
+            stats->work_frontier_survivors_total += layer_survivors;
+            stats->work_frontier_peak_points = std::max(stats->work_frontier_peak_points, layer_survivors);
+            stats->wall_expand_td_s += std::chrono::duration_cast<std::chrono::duration<double> >(std::chrono::steady_clock::now() - layer_begin).count();
         }
 
         d_prev_offsets.swap(d_next_offsets);
@@ -1052,9 +1066,6 @@ ParetoFrontier* topdown_mdd_cuda_enumerate(MDD* mdd,
                                            EnumerationStats* stats,
                                            std::string* reason,
                                            int kernel_version) {
-    using std::cout;
-    using std::endl;
-
     if (mdd == NULL) { set_reason(reason, "MDD is NULL"); return NULL; }
     if (mdd->num_layers <= 0) { set_reason(reason, "MDD has zero layers"); return NULL; }
     if (!topdown_cuda_available(reason)) return NULL;
@@ -1064,6 +1075,7 @@ ParetoFrontier* topdown_mdd_cuda_enumerate(MDD* mdd,
     clock_t t0, t1;
 
     // 1. Pack top-down layers
+    const auto pack_begin = std::chrono::steady_clock::now();
     t0 = clock();
     std::vector<PackedMDDLayer> packed(num_layers);
     for (int l = 0; l < num_layers; ++l) {
@@ -1095,7 +1107,9 @@ ParetoFrontier* topdown_mdd_cuda_enumerate(MDD* mdd,
         }
     }
     t1 = clock();
-    cout << "[CUDA] TD Packing: " << (double)(t1-t0)/CLOCKS_PER_SEC << "s (" << num_layers << " layers)" << endl;
+    if (stats != NULL) {
+        stats->wall_pack_transfer_s += std::chrono::duration_cast<std::chrono::duration<double> >(std::chrono::steady_clock::now() - pack_begin).count();
+    }
 
     // 2. Initialize frontier at root
     const int root_nodes = packed[0].num_nodes;
@@ -1110,11 +1124,12 @@ ParetoFrontier* topdown_mdd_cuda_enumerate(MDD* mdd,
     thrust::device_vector<ObjType> d_td_points(NOBJS, 0); // single point (0,0...)
 
     // 3. Expand layer by layer
-    double total_td_time = 0.0;
     for (int l = 1; l < num_layers; ++l) {
         const int nn = packed[l].num_nodes;
         thrust::device_vector<int> d_ns, d_no;
         thrust::device_vector<ObjType> d_np;
+        long long layer_candidates = 0;
+        long long layer_survivors = 0;
 
         t0 = clock();
             if (!expand_layer_cuda(
@@ -1124,23 +1139,22 @@ ParetoFrontier* topdown_mdd_cuda_enumerate(MDD* mdd,
                     packed[l].td_num_edges,
                     nn,
                     d_td_offsets, d_td_points,
-                    d_ns, d_no, d_np, reason, kernel_version)) {
+                    d_ns, d_no, d_np, reason, kernel_version,
+                    &layer_candidates, &layer_survivors)) {
             return NULL;
         }
         t1 = clock();
-        double elapsed = (double)(t1-t0)/CLOCKS_PER_SEC;
-        total_td_time += elapsed;
-
-        int total_pts = thrust::reduce(d_ns.begin(), d_ns.end(), 0);
-        cout << "[CUDA] TD expand layer " << l << ": "
-             << nn << " nodes, " << packed[l].td_num_edges << " edges, "
-             << total_pts << " pts, " << elapsed << "s" << endl;
+        if (stats != NULL) {
+            stats->wall_expand_td_s += (double)(t1-t0)/CLOCKS_PER_SEC;
+            stats->work_candidates_total += layer_candidates;
+            stats->work_frontier_survivors_total += layer_survivors;
+            stats->work_frontier_peak_points = std::max(stats->work_frontier_peak_points, layer_survivors);
+        }
 
         d_td_sizes.swap(d_ns);
         d_td_offsets.swap(d_no);
         d_td_points.swap(d_np);
     }
-    cout << "[CUDA] TD Expansion done, total time: " << total_td_time << "s" << endl;
 
     // 4. Extract points from terminal node
     const int term_idx = mdd->get_terminal()->index;
