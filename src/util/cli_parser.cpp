@@ -14,7 +14,6 @@ using namespace std;
 
 CliOptions::CliOptions()
     : problem_type(0),
-      preprocess(false),
       method(0),
       dominance(0),
       backend(BACKEND_CPU),
@@ -106,19 +105,14 @@ const char *backend_to_string(const Backend backend)
 void print_usage()
 {
     cout << '\n';
-    cout << "Usage: multiobj_nobjs<NUM_OBJS> [input file] [problem type] [preprocess?] [method] [dominance] [options]\n";
+    cout << "Usage: multiobj_nobjs<NUM_OBJS> [input file] [problem type] [method] [dominance] [options]\n";
 
     cout << "\n\twhere:";
 
     cout << "\n";
     cout << "\t\tproblem_type = 1: knapsack\n";
     cout << "\t\tproblem_type = 2: set packing\n";
-    cout << "\t\tproblem_type = 3: set covering\n";
-    cout << "\t\tproblem_type = 4: TSP\n";
-
-    cout << "\n";
-    cout << "\t\tpreprocess = 0: do not preprocess instance\n";
-    cout << "\t\tpreprocess = 1: preprocess input to minimize BDD size\n";
+    cout << "\t\tproblem_type = 3: TSP\n";
 
     cout << "\n";
     cout << "\t\tmethod = 1: top-down BFS\n";
@@ -152,8 +146,7 @@ void print_usage()
     cout << "\t\tkernel omitted with backend=gpu: defaults by problem type\n";
     cout << "\t\t\tproblem_type=1 (knapsack): 1\n";
     cout << "\t\t\tproblem_type=2 (set packing): 2\n";
-    cout << "\t\t\tproblem_type=3 (set covering): 1\n";
-    cout << "\t\t\tproblem_type=4 (TSP): 3\n";
+    cout << "\t\t\tproblem_type=3 (TSP): 3\n";
 
     cout << "\n";
     cout << "\t\t--save-frontier: save Pareto frontier to <input_stem>.frontier.csv.gz\n";
@@ -177,7 +170,7 @@ bool parse_cli_args(int argc, char *argv[], CliOptions *out, string *error)
         return false;
     }
 
-    if (argc < 6)
+    if (argc < 5)
     {
         if (error != NULL)
         {
@@ -189,9 +182,17 @@ bool parse_cli_args(int argc, char *argv[], CliOptions *out, string *error)
     CliOptions opts;
     opts.input_path = argv[1];
     opts.problem_type = atoi(argv[2]);
-    opts.preprocess = (argv[3][0] == '1');
-    opts.method = atoi(argv[4]);
-    opts.dominance = atoi(argv[5]);
+    opts.method = atoi(argv[3]);
+    opts.dominance = atoi(argv[4]);
+
+    if (opts.problem_type < 1 || opts.problem_type > 3)
+    {
+        if (error != NULL)
+        {
+            *error = "Error - invalid problem type '" + string(argv[2]) + "'. Valid problem types are 1 (knapsack), 2 (set packing), 3 (TSP).";
+        }
+        return false;
+    }
 
     bool backend_set = false;
     bool backend_from_named = false;
@@ -199,7 +200,7 @@ bool parse_cli_args(int argc, char *argv[], CliOptions *out, string *error)
     bool kernel_version_set = false;
     bool cpu_threads_set = false;
 
-    for (int i = 6; i < argc; ++i)
+    for (int i = 5; i < argc; ++i)
     {
         string token(argv[i]);
         if (token == "--backend")
@@ -503,7 +504,7 @@ bool parse_cli_args(int argc, char *argv[], CliOptions *out, string *error)
 
     if (opts.backend == BACKEND_GPU && !kernel_version_set)
     {
-        if (opts.problem_type == 1 || opts.problem_type == 3)
+        if (opts.problem_type == 1)
         {
             opts.kernel_version = 1;
         }
@@ -511,17 +512,9 @@ bool parse_cli_args(int argc, char *argv[], CliOptions *out, string *error)
         {
             opts.kernel_version = 2;
         }
-        else if (opts.problem_type == 4)
+        else if (opts.problem_type == 3)
         {
             opts.kernel_version = 3;
-        }
-        else
-        {
-            if (error != NULL)
-            {
-                *error = "Error - problem type not recognized";
-            }
-            return false;
         }
     }
     else if (opts.backend == BACKEND_CPU)

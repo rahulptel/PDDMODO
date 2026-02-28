@@ -773,9 +773,6 @@ inline void BDDMultiObj::filter_dominance(BDD* bdd, const int layer, const int p
 	} else if (problem_type == 2) {
 		// Set packing
         filter_dominance_setpacking(bdd, layer, stats);
-	} else if (problem_type == 3) {
-		// Set covering
-        filter_dominance_setcovering(bdd, layer, stats);
 	}
 }
 
@@ -1043,91 +1040,6 @@ void BDDMultiObj::filter_dominance_setpacking(BDD* bdd, const int layer, Enumera
 //    
 //    cout << "Layer " << layer << " - total filtered: " << total << endl;
 //}
-
-
-//
-// Filter layer based on dominance / set covering
-//
-void BDDMultiObj::filter_dominance_setcovering(BDD* bdd, const int layer, EnumerationStats* stats) {
-    //	cout << "Applying filter dominance for set covering..." << endl;
-    
-    // if (layer > bdd->num_layers/3+10) {
-    // 	return;
-    // }
-    
-    
-    // It is a MINIMIZATION problem!!!
-    
-    //int total = 0;
-    int NoNodes = (int) bdd->layers[layer].size();
-    if(NoNodes > 1) {
-        // Compare the nodes based on their states which are the set of constraints that we have to cover
-        // The subset set can potentially dominate the subset
-        // First, build a dominance graph: A matrix where (i,i) = 0, and (i,j) = 1 means that i can potentially dominate j, i.e., StateSet(i) \subseteq StateSet(j)
-        
-        vector< vector<int> > DominanceGraph(NoNodes,vector<int>(NoNodes,0));
-        for(int i=0; i < NoNodes-1; i++) {
-            for(int j=i+1; j < NoNodes; j++) {
-                if(bdd->layers[layer][i]->setcover_state.is_subset_of(bdd->layers[layer][j]->setcover_state))  // i is a supset of j
-                    DominanceGraph[i][j] = 1;
-                if(bdd->layers[layer][j]->setcover_state.is_subset_of(bdd->layers[layer][i]->setcover_state))  // j is a supset of i
-                    DominanceGraph[j][i] = 1;
-            }
-        }
-        
-        // Heuristically try some pairs for which the dominance graph entry is 1
-        for(int i=0; i < NoNodes; i++) { // try to dominate i
-            int index1 = i;
-            Node* node1 = bdd->layers[layer][index1];
-            int num_dominated = 0;
-            
-            for(int j=0; j < NoNodes; j++) {
-                if(DominanceGraph[j][i] == 1) {
-                    // j can potentially dominate i
-                    int index2 = j;
-                    Node* node2 = bdd->layers[layer][index2];
-                    
-                    // if node1 and node 2 have one parent and they are the same, continue
-                    if (node1->prev[0].size() + node1->prev[1].size() == 1
-                        && node2->prev[0].size() + node2->prev[1].size() == 1)
-                    {
-                        if (node1->prev[0].size() > 0 && node2->prev[1].size() > 0 && node1->prev[0][0] == node2->prev[1][0])
-                            continue;
-                        if (node1->prev[1].size() > 0 && node2->prev[0].size() > 0 && node1->prev[1][0] == node2->prev[0][0])
-                            continue;
-                    }
-                    
-                    // Check each label of node at index1 whether it is dominated or not
-                    for (int s1 = 0; s1 < node1->pareto_frontier->sols.size(); s1 += NOBJS) {
-                        if(node1->pareto_frontier->sols[s1] == DOMINATED)
-                            continue;
-                        
-                        bool dominated = true;
-                        for (int s2 = 0; s2 < node2->pareto_frontier->sols.size(); s2 += NOBJS) {
-                            dominated = true;
-                            for (int p = 0; p < NOBJS && dominated; ++p)
-                                dominated = ( node2->pareto_frontier->sols[s2+p] >= node1->pareto_frontier->sols[s1+p] );
-                            if (dominated) {
-                                node1->pareto_frontier->sols[s1] = DOMINATED;
-                                num_dominated++;
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-            if (num_dominated > 0) {
-                //cout << "\tBefore: " << node1->pareto_frontier->get_num_sols() << endl;
-                node1->pareto_frontier->remove_dominated();
-                //cout << "\tAfter: " << node1->pareto_frontier->get_num_sols() << endl << endl;
-                stats->pareto_dominance_filtered += num_dominated;
-            }
-            //            cout << "layer: " << layer << ", node: " << node1->index << " , num_dominated: " << num_dominated << endl;
-        }
-    }
-    
-    //cout << "Layer " << layer << " - total filtered: " << total << endl;
-}
 
 
 //

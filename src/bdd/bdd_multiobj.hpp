@@ -104,9 +104,6 @@ struct BDDMultiObj {
     // Filter layer based on dominance / set packing
     static void filter_dominance_setpacking(BDD* bdd, const int layer, EnumerationStats* stats);
     
-    // Filter layer based on dominance / set covering
-    static void filter_dominance_setcovering(BDD* bdd, const int layer, EnumerationStats* stats);
-
     // Filter layer based on node completion
     static void filter_completion(BDD* bdd, const int layer);    
 

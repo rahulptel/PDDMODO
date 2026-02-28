@@ -39,7 +39,7 @@ Executable name:
 CLI:
 
 ```bash
-./multiobj_nobjs3 <input-file> <problem-type> <preprocess> <method> <dominance> [options]
+./multiobj_nobjs3 <input-file> <problem-type> <method> <dominance> [options]
 ```
 
 Backend selection (optional; defaults to CPU):
@@ -69,8 +69,7 @@ Kernel mapping:
 If backend is `gpu` and kernel is omitted, defaults are:
 - knapsack (`problem-type=1`) -> `1`
 - set packing (`problem-type=2`) -> `2`
-- set covering (`problem-type=3`) -> `1`
-- tsp (`problem-type=4`) -> `3`
+- tsp (`problem-type=3`) -> `3`
 
 Frontier saving options:
 - `--save-frontier`: save frontier as gzip-compressed CSV to `<input_stem>.frontier.csv.gz` in the current working directory.

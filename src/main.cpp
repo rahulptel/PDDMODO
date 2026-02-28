@@ -28,10 +28,6 @@
 #include "instances/setpacking_instance.hpp"
 #include "bdd/indepset_bdd.hpp"
 
-// Set covering includes
-#include "instances/setcovering_instance.hpp"
-#include "bdd/setcovering_bdd.hpp"
-
 // TSP instance
 #include "instances/tsp_instance.hpp"
 #include "mdd/tsp_mdd.hpp"
@@ -96,7 +92,7 @@ static string shell_single_quote(const string &value)
     return quoted;
 }
 
-static bool write_frontier_gzip_csv(const ParetoFrontier *frontier, const int problem_type, const string &out_path, string *error)
+static bool write_frontier_gzip_csv(const ParetoFrontier *frontier, const string &out_path, string *error)
 {
     if (frontier == NULL)
     {
@@ -141,18 +137,12 @@ static bool write_frontier_gzip_csv(const ParetoFrontier *frontier, const int pr
     {
         for (int o = 0; o < NOBJS; ++o)
         {
-            ObjType value = frontier->sols[i + o];
-            if (problem_type == 3)
-            {
-                value = -value;
-            }
-
             if (o > 0 && fputc(',', pipe) == EOF)
             {
                 ok = false;
                 break;
             }
-            if (fprintf(pipe, "%d", value) < 0)
+            if (fprintf(pipe, "%d", frontier->sols[i + o]) < 0)
             {
                 ok = false;
                 break;
@@ -328,7 +318,6 @@ static bool write_stats_jsonl(const string &out_path,
     out << '{';
     write_string("input_path", opts.input_path);
     write_int("problem_type", opts.problem_type);
-    write_bool("preprocess", opts.preprocess);
     write_int("method", opts.method);
     write_int("dominance", opts.dominance);
     write_string("backend", backend_to_string(opts.backend));
@@ -402,7 +391,6 @@ int main(int argc, char *argv[])
 
     const string input_path = options.input_path;
     const int problem_type = options.problem_type;
-    const bool preprocess = options.preprocess;
     const int method = options.method;
     bool maximization = true;
     const int dominance = options.dominance;
@@ -442,11 +430,6 @@ int main(int argc, char *argv[])
         // Read instance
         KnapsackInstance inst;
         inst.read(const_cast<char *>(input_path.c_str()));
-
-        // if (preprocess) {
-        //     // Reorder variables
-        //     inst.reorder_coefficients();
-        // }
 
         // Construct BDD
         KnapsackBDDConstructor bddCons(&inst);
@@ -504,37 +487,8 @@ int main(int argc, char *argv[])
         reduced_num_nodes = bdd->get_num_nodes();
     }
 
-    // --- Set Covering ---
+    // --- TSP ---
     else if (problem_type == 3)
-    {
-        // set objective sense
-        maximization = false;
-
-        // read instance
-        SetCoveringInstance setcover(input_path.c_str());
-
-        // preprocess
-        if (preprocess)
-        {
-            setcover.minimize_bandwidth();
-        }
-
-        // create BDD
-        SetCoveringBDDConstructor bddConstructor(&setcover, setcover.objs);
-        bdd = bddConstructor.generate_exact();
-
-        original_width = bdd->get_width();
-        original_num_nodes = bdd->get_num_nodes();
-
-        // Reduce BDD
-        // BDDAlg::reduce(bdd);
-
-        reduced_width = bdd->get_width();
-        reduced_num_nodes = bdd->get_num_nodes();
-
-        // --- TSP ---
-    }
-    else if (problem_type == 4)
     {
         // Read instance
         TSPInstance inst;
@@ -599,7 +553,7 @@ int main(int argc, char *argv[])
         if (save_frontier)
         {
             string save_error;
-            if (!write_frontier_gzip_csv(pareto_frontier, problem_type, frontier_out_path, &save_error))
+            if (!write_frontier_gzip_csv(pareto_frontier, frontier_out_path, &save_error))
             {
                 cout << "Error - failed to save frontier to '" << frontier_out_path << "'";
                 if (!save_error.empty())
@@ -765,7 +719,7 @@ int main(int argc, char *argv[])
     if (save_frontier)
     {
         string save_error;
-        if (!write_frontier_gzip_csv(pareto_frontier, problem_type, frontier_out_path, &save_error))
+        if (!write_frontier_gzip_csv(pareto_frontier, frontier_out_path, &save_error))
         {
             cout << "Error - failed to save frontier to '" << frontier_out_path << "'";
             if (!save_error.empty())
@@ -793,7 +747,6 @@ int main(int argc, char *argv[])
     // stats << argv[1];
     // stats << "\t" << problem_type;
     // stats << "\t" << NOBJS;
-    // stats << "\t" << preprocess;
     // stats << "\t" << method;
     // stats << "\t" << pareto_frontier->get_num_sols();
     // stats << "\t" << original_width;

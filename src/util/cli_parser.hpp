@@ -17,7 +17,6 @@ struct CliOptions
 {
     std::string input_path;
     int problem_type;
-    bool preprocess;
     int method;
     int dominance;
     Backend backend;
