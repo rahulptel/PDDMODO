@@ -160,7 +160,7 @@ bool write_frontier_gzip_csv(const ParetoFrontier *frontier, const string &out_p
 bool write_stats_jsonl(const string &out_path,
                        const CliOptions &opts,
                        const EnumerationStats *stats,
-                       const RunSummaryStats &record,
+                       const DDStats &record,
                        string *error)
 {
     ofstream out(out_path.c_str(), ios::out | ios::app);
@@ -174,9 +174,15 @@ bool write_stats_jsonl(const string &out_path,
     }
 
     out << fixed << setprecision(6);
-    const double cpu_dominance_s = stats != NULL ? ((double)stats->cpu_ticks_dominance) / CLOCKS_PER_SEC : record.cpu_dominance_s;
-    const int layer_coupling = stats != NULL ? stats->layer_coupling : record.layer_coupling;
-    const int dominance_filtered_total = stats != NULL ? stats->dominance_filtered_total : record.dominance_filtered_total;
+    const double cpu_compile_s = stats != NULL ? stats->cpu_compile_s : 0.0;
+    const double cpu_enumeration_s = stats != NULL ? stats->cpu_enumeration_s : 0.0;
+    const double cpu_total_s = stats != NULL ? stats->cpu_total_s : 0.0;
+    const double cpu_dominance_s = stats != NULL ? stats->cpu_dominance_s : 0.0;
+    const double wall_compile_s = stats != NULL ? stats->wall_compile_s : 0.0;
+    const double wall_enumeration_s = stats != NULL ? stats->wall_enumeration_s : 0.0;
+    const double wall_total_end_to_end_s = stats != NULL ? stats->wall_total_end_to_end_s : 0.0;
+    const int layer_coupling = stats != NULL ? stats->layer_coupling : 0;
+    const int dominance_filtered_total = stats != NULL ? stats->dominance_filtered_total : 0;
     const long long work_candidates_total = stats != NULL ? stats->work_candidates_total : 0;
     const long long work_frontier_survivors_total = stats != NULL ? stats->work_frontier_survivors_total : 0;
     const long long work_frontier_peak_points = stats != NULL ? stats->work_frontier_peak_points : 0;
@@ -195,22 +201,22 @@ bool write_stats_jsonl(const string &out_path,
     out << "},";
 
     out << "\"outputs\":{";
-    out << "\"num_solutions\":" << record.num_solutions << ",";
+    out << "\"num_solutions\":" << (stats != NULL ? stats->num_solutions : 0) << ",";
     out << "\"save_frontier\":" << (opts.save_frontier ? "true" : "false") << ",";
     out << "\"frontier_out_path\":\"" << json_escape(opts.frontier_out_path) << "\"";
     out << "},";
 
     out << "\"timing\":{";
     out << "\"cpu\":{";
-    out << "\"cpu_compile_s\":" << record.cpu_compile_s << ",";
-    out << "\"cpu_enumeration_s\":" << record.cpu_enumeration_s << ",";
-    out << "\"cpu_total_s\":" << record.cpu_total_s << ",";
+    out << "\"cpu_compile_s\":" << cpu_compile_s << ",";
+    out << "\"cpu_enumeration_s\":" << cpu_enumeration_s << ",";
+    out << "\"cpu_total_s\":" << cpu_total_s << ",";
     out << "\"cpu_dominance_s\":" << cpu_dominance_s;
     out << "},";
     out << "\"wall\":{";
-    out << "\"wall_compile_s\":" << record.wall_compile_s << ",";
-    out << "\"wall_enumeration_s\":" << record.wall_enumeration_s << ",";
-    out << "\"wall_total_end_to_end_s\":" << record.wall_total_end_to_end_s;
+    out << "\"wall_compile_s\":" << wall_compile_s << ",";
+    out << "\"wall_enumeration_s\":" << wall_enumeration_s << ",";
+    out << "\"wall_total_end_to_end_s\":" << wall_total_end_to_end_s;
     out << "}";
     out << "},";
 
@@ -227,8 +233,8 @@ bool write_stats_jsonl(const string &out_path,
     out << "},";
 
     out << "\"structure\":{";
-    out << "\"is_tsp_branch\":" << (record.is_tsp_branch ? "true" : "false") << ",";
-    out << "\"postprocess_sort_applied\":" << (record.postprocess_sort_applied ? "true" : "false") << ",";
+    out << "\"is_tsp_branch\":" << (opts.problem_type == 3 ? "true" : "false") << ",";
+    out << "\"postprocess_sort_applied\":true,";
     out << "\"original_width\":" << record.original_width << ",";
     out << "\"reduced_width\":" << record.reduced_width << ",";
     out << "\"original_num_nodes\":" << record.original_num_nodes << ",";
@@ -272,24 +278,41 @@ bool write_stats_jsonl(const string &out_path,
 
 void print_and_save_run_summary(const CliOptions &opts, 
                                 const EnumerationStats *enumeration_stats, 
-                                const RunSummaryStats &run_summary, 
+                                const DDStats &run_summary, 
                                 const ParetoFrontier *pareto_frontier)
 {
-    if (run_summary.is_tsp_branch)
+    if (opts.problem_type == 3)
     {
-        cout << pareto_frontier->get_num_sols() << endl;
-        cout << run_summary.cpu_total_s << endl;
-        cout << run_summary.cpu_compile_s;
-        cout << "\t" << run_summary.cpu_enumeration_s;
-        cout << "\t" << run_summary.wall_compile_s;
-        cout << "\t" << run_summary.wall_enumeration_s;
-        cout << "\t" << run_summary.wall_total_end_to_end_s;
+        const double cpu_total_s = enumeration_stats != NULL ? enumeration_stats->cpu_total_s : 0.0;
+        const double cpu_compile_s = enumeration_stats != NULL ? enumeration_stats->cpu_compile_s : 0.0;
+        const double cpu_enumeration_s = enumeration_stats != NULL ? enumeration_stats->cpu_enumeration_s : 0.0;
+        const double wall_compile_s = enumeration_stats != NULL ? enumeration_stats->wall_compile_s : 0.0;
+        const double wall_enumeration_s = enumeration_stats != NULL ? enumeration_stats->wall_enumeration_s : 0.0;
+        const double wall_total_end_to_end_s = enumeration_stats != NULL ? enumeration_stats->wall_total_end_to_end_s : 0.0;
+
+        cout << (enumeration_stats != NULL ? enumeration_stats->num_solutions : pareto_frontier->get_num_sols()) << endl;
+        cout << cpu_total_s << endl;
+        cout << cpu_compile_s;
+        cout << "\t" << cpu_enumeration_s;
+        cout << "\t" << wall_compile_s;
+        cout << "\t" << wall_enumeration_s;
+        cout << "\t" << wall_total_end_to_end_s;
         cout << endl;
     }
     else
     {
-        cout << pareto_frontier->get_num_sols() << endl;
-        cout << run_summary.cpu_total_s << endl;
+        const int layer_coupling = enumeration_stats != NULL ? enumeration_stats->layer_coupling : 0;
+        const int dominance_filtered_total = enumeration_stats != NULL ? enumeration_stats->dominance_filtered_total : 0;
+        const double cpu_dominance_s = enumeration_stats != NULL ? enumeration_stats->cpu_dominance_s : 0.0;
+        const double cpu_compile_s = enumeration_stats != NULL ? enumeration_stats->cpu_compile_s : 0.0;
+        const double cpu_enumeration_s = enumeration_stats != NULL ? enumeration_stats->cpu_enumeration_s : 0.0;
+        const double cpu_total_s = enumeration_stats != NULL ? enumeration_stats->cpu_total_s : 0.0;
+        const double wall_compile_s = enumeration_stats != NULL ? enumeration_stats->wall_compile_s : 0.0;
+        const double wall_enumeration_s = enumeration_stats != NULL ? enumeration_stats->wall_enumeration_s : 0.0;
+        const double wall_total_end_to_end_s = enumeration_stats != NULL ? enumeration_stats->wall_total_end_to_end_s : 0.0;
+
+        cout << (enumeration_stats != NULL ? enumeration_stats->num_solutions : pareto_frontier->get_num_sols()) << endl;
+        cout << cpu_total_s << endl;
 
         cout << opts.method;
         cout << "\t" << opts.dominance;
@@ -297,14 +320,14 @@ void print_and_save_run_summary(const CliOptions &opts,
         cout << "\t" << run_summary.reduced_width;
         cout << "\t" << run_summary.original_num_nodes;
         cout << "\t" << run_summary.reduced_num_nodes;
-        cout << "\t" << run_summary.cpu_compile_s;
-        cout << "\t" << run_summary.cpu_enumeration_s;
-        cout << "\t" << enumeration_stats->layer_coupling;
-        cout << "\t" << enumeration_stats->dominance_filtered_total;
-        cout << "\t" << run_summary.cpu_dominance_s;
-        cout << "\t" << run_summary.wall_compile_s;
-        cout << "\t" << run_summary.wall_enumeration_s;
-        cout << "\t" << run_summary.wall_total_end_to_end_s;
+        cout << "\t" << cpu_compile_s;
+        cout << "\t" << cpu_enumeration_s;
+        cout << "\t" << layer_coupling;
+        cout << "\t" << dominance_filtered_total;
+        cout << "\t" << cpu_dominance_s;
+        cout << "\t" << wall_compile_s;
+        cout << "\t" << wall_enumeration_s;
+        cout << "\t" << wall_total_end_to_end_s;
         cout << endl;
     }
 

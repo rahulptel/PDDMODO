@@ -15,12 +15,12 @@ bool write_frontier_gzip_csv(const ParetoFrontier *frontier, const std::string &
 bool write_stats_jsonl(const std::string &out_path,
                        const CliOptions &opts,
                        const EnumerationStats *stats,
-                       const RunSummaryStats &record,
+                       const DDStats &record,
                        std::string *error);
 
 void print_and_save_run_summary(const CliOptions &opts, 
                                 const EnumerationStats *enumeration_stats, 
-                                const RunSummaryStats &run_summary, 
+                                const DDStats &run_summary, 
                                 const ParetoFrontier *pareto_frontier);
 
 #endif /* OUTPUT_UTILS_HPP_ */

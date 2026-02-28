@@ -69,13 +69,6 @@ int main(int argc, char *argv[])
 
     typedef std::chrono::steady_clock WallClock;
     const WallClock::time_point run_wall_begin = WallClock::now();
-    double compilation_wall_s = 0.0;
-    double pareto_wall_enumeration_s = 0.0;
-
-    // For statistical analysis
-    TimeStats timers;
-    int bdd_compilation_time = timers.register_name("BDD compilation time");
-    int pareto_time = timers.register_name("BDD pareto time");
     long int original_width;
     long int reduced_width;
     long int original_num_nodes;
@@ -85,7 +78,7 @@ int main(int argc, char *argv[])
     BDD *bdd = NULL;
     vector<vector<int>> obj_coeffs;
     const WallClock::time_point compilation_wall_begin = WallClock::now();
-    timers.start_timer(bdd_compilation_time);
+    const clock_t compilation_cpu_begin = clock();
 
     // --- Knapsack ---
     if (problem_type == 1)
@@ -167,7 +160,7 @@ int main(int argc, char *argv[])
         assert(mdd != NULL);
 
         compilation_tsp = clock() - compilation_tsp;
-        compilation_wall_s = std::chrono::duration_cast<std::chrono::duration<double> >(WallClock::now() - compilation_tsp_wall_begin).count();
+        const double compilation_tsp_wall_s = std::chrono::duration_cast<std::chrono::duration<double> >(WallClock::now() - compilation_tsp_wall_begin).count();
 
         // Generate frontier (timed region excludes final lexicographic sort)
         const WallClock::time_point pareto_tsp_wall_begin = WallClock::now();
@@ -209,7 +202,7 @@ int main(int argc, char *argv[])
             exit(1);
         }
         pareto_tsp_cpu = clock() - pareto_tsp_cpu;
-        pareto_wall_enumeration_s = std::chrono::duration_cast<std::chrono::duration<double> >(WallClock::now() - pareto_tsp_wall_begin).count();
+        const double pareto_tsp_wall_enumeration_s = std::chrono::duration_cast<std::chrono::duration<double> >(WallClock::now() - pareto_tsp_wall_begin).count();
 
         assert(pareto_frontier != NULL);
         pareto_frontier->sort_lexicographic_ascending();
@@ -233,23 +226,20 @@ int main(int argc, char *argv[])
             std::chrono::duration_cast<std::chrono::duration<double> >(WallClock::now() - run_wall_begin).count();
 
         // Run-level summary assembled in main for reporting/output only.
-        RunSummaryStats run_summary;
-        run_summary.is_tsp_branch = true;
-        run_summary.postprocess_sort_applied = true;
-        run_summary.num_solutions = pareto_frontier->get_num_sols();
+        DDStats run_summary;
         run_summary.original_width = -1;
         run_summary.reduced_width = -1;
         run_summary.original_num_nodes = -1;
         run_summary.reduced_num_nodes = -1;
-        run_summary.layer_coupling = enumeration_stats->layer_coupling;
-        run_summary.dominance_filtered_total = enumeration_stats->dominance_filtered_total;
-        run_summary.cpu_dominance_s = ((double)enumeration_stats->cpu_ticks_dominance) / CLOCKS_PER_SEC;
-        run_summary.cpu_compile_s = ((double)compilation_tsp) / CLOCKS_PER_SEC;
-        run_summary.cpu_enumeration_s = ((double)pareto_tsp_cpu) / CLOCKS_PER_SEC;
-        run_summary.cpu_total_s = run_summary.cpu_compile_s + run_summary.cpu_enumeration_s;
-        run_summary.wall_compile_s = compilation_wall_s;
-        run_summary.wall_enumeration_s = pareto_wall_enumeration_s;
-        run_summary.wall_total_end_to_end_s = wall_total_end_to_end_s;
+
+        enumeration_stats->num_solutions = pareto_frontier->get_num_sols();
+        enumeration_stats->cpu_compile_s = ((double)compilation_tsp) / CLOCKS_PER_SEC;
+        enumeration_stats->cpu_enumeration_s = ((double)pareto_tsp_cpu) / CLOCKS_PER_SEC;
+        enumeration_stats->cpu_total_s = enumeration_stats->cpu_compile_s + enumeration_stats->cpu_enumeration_s;
+        enumeration_stats->cpu_dominance_s = ((double)enumeration_stats->cpu_ticks_dominance) / CLOCKS_PER_SEC;
+        enumeration_stats->wall_compile_s = compilation_tsp_wall_s;
+        enumeration_stats->wall_enumeration_s = pareto_tsp_wall_enumeration_s;
+        enumeration_stats->wall_total_end_to_end_s = wall_total_end_to_end_s;
 
         print_and_save_run_summary(options, enumeration_stats, run_summary, pareto_frontier);
 
@@ -261,15 +251,15 @@ int main(int argc, char *argv[])
         exit(1);
     }
 
-    timers.end_timer(bdd_compilation_time);
-    compilation_wall_s = std::chrono::duration_cast<std::chrono::duration<double> >(WallClock::now() - compilation_wall_begin).count();
+    const clock_t compilation_cpu_elapsed = clock() - compilation_cpu_begin;
+    const double compilation_wall_s = std::chrono::duration_cast<std::chrono::duration<double> >(WallClock::now() - compilation_wall_begin).count();
 
     // cout << "\nBDD Info:\n";
     // cout << "\tOriginal width: " << original_width << endl;
     // cout << "\tOriginal number of nodes: " << original_num_nodes << endl;
     // cout << "\n\tReduced width: " << reduced_width << endl;
     // cout << "\tReduced number of nodes: " << reduced_num_nodes << endl;
-    // cout << "\n\tBDD compilation total time: " << timers.get_time(bdd_compilation_time) << endl;
+    // cout << "\n\tBDD compilation total time: " << ((double)compilation_cpu_elapsed)/CLOCKS_PER_SEC << endl;
 
     // Initialize enumeration stats
     // Solver-owned stats populated during frontier enumeration.
@@ -280,7 +270,7 @@ int main(int argc, char *argv[])
     // cout << "\n\nComputing pareto frontier..." << endl;
     ParetoFrontier *pareto_frontier = NULL;
     const WallClock::time_point pareto_wall_begin = WallClock::now();
-    timers.start_timer(pareto_time);
+    const clock_t pareto_cpu_begin = clock();
 
     if (method == 1)
     {
@@ -336,8 +326,8 @@ int main(int argc, char *argv[])
         cout << "\nError - pareto frontier not computed" << endl;
         exit(1);
     }
-    timers.end_timer(pareto_time);
-    pareto_wall_enumeration_s = std::chrono::duration_cast<std::chrono::duration<double> >(WallClock::now() - pareto_wall_begin).count();
+    const clock_t pareto_cpu_elapsed = clock() - pareto_cpu_begin;
+    const double pareto_wall_enumeration_s = std::chrono::duration_cast<std::chrono::duration<double> >(WallClock::now() - pareto_wall_begin).count();
 
     pareto_frontier->sort_lexicographic_ascending();
 
@@ -358,9 +348,9 @@ int main(int argc, char *argv[])
 
     // cout << "\nPareto frontier: " << endl;
     // cout << "\tNumber of solutions: " << pareto_frontier->get_num_sols() << endl;
-    // cout << "\n\tBDD time: " << timers.get_time(bdd_compilation_time) << endl;
-    // cout << "\tPareto time: " << timers.get_time(pareto_time) << endl;
-    // cout << "\tTotal time: " << (timers.get_time(bdd_compilation_time) + timers.get_time(pareto_time)) << endl;
+    // cout << "\n\tBDD time: " << ((double)compilation_cpu_elapsed)/CLOCKS_PER_SEC << endl;
+    // cout << "\tPareto time: " << ((double)pareto_cpu_elapsed)/CLOCKS_PER_SEC << endl;
+    // cout << "\tTotal time: " << (((double)(compilation_cpu_elapsed + pareto_cpu_elapsed))/CLOCKS_PER_SEC) << endl;
     // cout << endl;
 
     // cout << "\n\nPareto frontier: " << endl;
@@ -378,9 +368,9 @@ int main(int argc, char *argv[])
     // stats << "\t" << original_num_nodes;
     // stats << "\t" << reduced_width;
     // stats << "\t" << reduced_num_nodes;
-    // stats << "\t" << timers.get_time(bdd_compilation_time);
-    // stats << "\t" << timers.get_time(pareto_time);
-    // stats << "\t" << (timers.get_time(bdd_compilation_time) + timers.get_time(pareto_time));
+    // stats << "\t" << ((double)compilation_cpu_elapsed)/CLOCKS_PER_SEC;
+    // stats << "\t" << ((double)pareto_cpu_elapsed)/CLOCKS_PER_SEC;
+    // stats << "\t" << (((double)(compilation_cpu_elapsed + pareto_cpu_elapsed))/CLOCKS_PER_SEC);
     // stats << endl;
     // stats.close();
 
@@ -388,23 +378,20 @@ int main(int argc, char *argv[])
         std::chrono::duration_cast<std::chrono::duration<double> >(WallClock::now() - run_wall_begin).count();
 
     // Run-level summary assembled in main for reporting/output only.
-    RunSummaryStats run_summary;
-    run_summary.is_tsp_branch = false;
-    run_summary.postprocess_sort_applied = true;
-    run_summary.num_solutions = pareto_frontier->get_num_sols();
+    DDStats run_summary;
     run_summary.original_width = original_width;
     run_summary.reduced_width = reduced_width;
     run_summary.original_num_nodes = original_num_nodes;
     run_summary.reduced_num_nodes = reduced_num_nodes;
-    run_summary.layer_coupling = enumeration_stats->layer_coupling;
-    run_summary.dominance_filtered_total = enumeration_stats->dominance_filtered_total;
-    run_summary.cpu_dominance_s = ((double)enumeration_stats->cpu_ticks_dominance) / CLOCKS_PER_SEC;
-    run_summary.cpu_compile_s = timers.get_time(bdd_compilation_time);
-    run_summary.cpu_enumeration_s = timers.get_time(pareto_time);
-    run_summary.cpu_total_s = run_summary.cpu_compile_s + run_summary.cpu_enumeration_s;
-    run_summary.wall_compile_s = compilation_wall_s;
-    run_summary.wall_enumeration_s = pareto_wall_enumeration_s;
-    run_summary.wall_total_end_to_end_s = wall_total_end_to_end_s;
+
+    enumeration_stats->num_solutions = pareto_frontier->get_num_sols();
+    enumeration_stats->cpu_compile_s = ((double)compilation_cpu_elapsed) / CLOCKS_PER_SEC;
+    enumeration_stats->cpu_enumeration_s = ((double)pareto_cpu_elapsed) / CLOCKS_PER_SEC;
+    enumeration_stats->cpu_total_s = enumeration_stats->cpu_compile_s + enumeration_stats->cpu_enumeration_s;
+    enumeration_stats->cpu_dominance_s = ((double)enumeration_stats->cpu_ticks_dominance) / CLOCKS_PER_SEC;
+    enumeration_stats->wall_compile_s = compilation_wall_s;
+    enumeration_stats->wall_enumeration_s = pareto_wall_enumeration_s;
+    enumeration_stats->wall_total_end_to_end_s = wall_total_end_to_end_s;
 
     print_and_save_run_summary(options, enumeration_stats, run_summary, pareto_frontier);
 
