@@ -48,6 +48,7 @@ STATUS_TIME_LIMIT=91
 STATUS_LIMITER_UNAVAILABLE=88
 STATUS_TIMEOUT_UNAVAILABLE=87
 CASE_STDERR_FILE="case.stderr"
+CASE_STDOUT_FILE="case.stdout"
 
 if ! command -v prlimit >/dev/null 2>&1
 then
@@ -59,8 +60,9 @@ then
   STATUS=$STATUS_TIMEOUT_UNAVAILABLE
 else
   : > "$CASE_STDERR_FILE"
+  : > "$CASE_STDOUT_FILE"
   timeout --signal=TERM --kill-after=30s $CASE_TIME_LIMIT \
-    prlimit --as=$CASE_MEM_LIMIT_BYTES -- bash -lc "$COMM" 2> "$CASE_STDERR_FILE"
+    prlimit --as=$CASE_MEM_LIMIT_BYTES -- bash -lc "$COMM" > "$CASE_STDOUT_FILE" 2> "$CASE_STDERR_FILE"
   STATUS=$?
 
   if test $STATUS -eq 124
@@ -69,8 +71,25 @@ else
     STATUS=$STATUS_TIME_LIMIT
   elif test $STATUS -ne 0
   then
-    OOM_PATTERN='std::bad_alloc|cannot allocate memory|out of memory|oom'
-    if test $STATUS -eq 134 -o $STATUS -eq 137 -o $STATUS -eq 139 || grep -Eiq "$OOM_PATTERN" "$CASE_STDERR_FILE"
+    IS_GPU_CASE=0
+    if echo "$COMM" | grep -Eq '(^|[[:space:]])--backend[[:space:]]+gpu([[:space:]]|$)|(^|[[:space:]])gpu([[:space:]]|$)'
+    then
+      IS_GPU_CASE=1
+    fi
+
+    CPU_OOM_PATTERN='std::bad_alloc|cannot allocate memory|out of memory|oom'
+    GPU_OOM_PATTERN='cudaErrorMemoryAllocation|CUDA_ERROR_OUT_OF_MEMORY|CUBLAS_STATUS_ALLOC_FAILED|thrust::system::system_error|hipErrorOutOfMemory|failed to allocate device memory|CUDA out of memory|out of memory'
+
+    OOM_MATCHED=0
+    if grep -Eiq "$CPU_OOM_PATTERN" "$CASE_STDERR_FILE" "$CASE_STDOUT_FILE"
+    then
+      OOM_MATCHED=1
+    elif test $IS_GPU_CASE -eq 1 && grep -Eiq "$GPU_OOM_PATTERN" "$CASE_STDERR_FILE" "$CASE_STDOUT_FILE"
+    then
+      OOM_MATCHED=1
+    fi
+
+    if test $STATUS -eq 134 -o $STATUS -eq 137 -o $STATUS -eq 139 -o $OOM_MATCHED -eq 1
     then
       echo "Case $ID: memory-limit failure detected (exit=$STATUS) -> STATUS=$STATUS_MEM_LIMIT"
       STATUS=$STATUS_MEM_LIMIT
