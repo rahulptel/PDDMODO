@@ -35,10 +35,6 @@ struct EnumerationStats {
     double wall_enumeration_s;
 
     // Aggregated wall times (seconds) for CPU phases
-    double wall_expand_td_s;
-    double wall_expand_bu_s;
-    double wall_recompute_td_s;
-    double wall_recompute_bu_s;
     double wall_state_dominance_s;
     double wall_cutset_sort_s;
     double wall_cutset_convolution_s;
@@ -83,10 +79,6 @@ struct EnumerationStats {
           cpu_dominance_s(0.0),
           wall_compile_s(0.0),
           wall_enumeration_s(0.0),
-          wall_expand_td_s(0.0),
-          wall_expand_bu_s(0.0),
-          wall_recompute_td_s(0.0),
-          wall_recompute_bu_s(0.0),
           wall_state_dominance_s(0.0),
           wall_cutset_sort_s(0.0),
           wall_cutset_convolution_s(0.0),

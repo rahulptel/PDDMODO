@@ -1235,7 +1235,6 @@ ParetoFrontier* topdown_cuda_enumerate(BDD* bdd,
             stats->work_candidates_total += layer_candidates;
             stats->work_frontier_survivors_total += layer_survivors;
             stats->work_frontier_peak_points = std::max(stats->work_frontier_peak_points, layer_survivors);
-            stats->wall_expand_td_s += std::chrono::duration_cast<std::chrono::duration<double> >(std::chrono::steady_clock::now() - layer_begin).count();
             if (!sample_gpu_memory_peak(reason, gpu_mem_baseline_used_bytes, &gpu_mem_peak_used_bytes, &gpu_mem_peak_reserved_bytes)) {
                 return NULL;
             }
@@ -1385,7 +1384,6 @@ ParetoFrontier* topdown_mdd_cuda_enumerate(MDD* mdd,
         }
         t1 = clock();
         if (stats != NULL) {
-            stats->wall_expand_td_s += (double)(t1-t0)/CLOCKS_PER_SEC;
             stats->work_candidates_total += layer_candidates;
             stats->work_frontier_survivors_total += layer_survivors;
             stats->work_frontier_peak_points = std::max(stats->work_frontier_peak_points, layer_survivors);
