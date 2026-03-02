@@ -33,7 +33,6 @@ struct EnumerationStats {
     double cpu_dominance_s;
     double wall_compile_s;
     double wall_enumeration_s;
-    double wall_total_end_to_end_s;
 
     // Aggregated wall times (seconds) for CPU phases
     double wall_expand_td_s;
@@ -81,7 +80,6 @@ struct EnumerationStats {
           cpu_dominance_s(0.0),
           wall_compile_s(0.0),
           wall_enumeration_s(0.0),
-          wall_total_end_to_end_s(0.0),
           wall_expand_td_s(0.0),
           wall_expand_bu_s(0.0),
           wall_recompute_td_s(0.0),

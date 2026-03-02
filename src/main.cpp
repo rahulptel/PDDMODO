@@ -222,9 +222,6 @@ int main(int argc, char *argv[])
             }
         }
 
-        const double wall_total_end_to_end_s =
-            std::chrono::duration_cast<std::chrono::duration<double> >(WallClock::now() - run_wall_begin).count();
-
         // Run-level summary assembled in main for reporting/output only.
         DDStats run_summary;
         run_summary.original_width = -1;
@@ -239,7 +236,6 @@ int main(int argc, char *argv[])
         enumeration_stats->cpu_dominance_s = ((double)enumeration_stats->cpu_ticks_dominance) / CLOCKS_PER_SEC;
         enumeration_stats->wall_compile_s = compilation_tsp_wall_s;
         enumeration_stats->wall_enumeration_s = pareto_tsp_wall_enumeration_s;
-        enumeration_stats->wall_total_end_to_end_s = wall_total_end_to_end_s;
 
         print_and_save_run_summary(options, enumeration_stats, run_summary, pareto_frontier);
 
@@ -374,9 +370,6 @@ int main(int argc, char *argv[])
     // stats << endl;
     // stats.close();
 
-    const double wall_total_end_to_end_s =
-        std::chrono::duration_cast<std::chrono::duration<double> >(WallClock::now() - run_wall_begin).count();
-
     // Run-level summary assembled in main for reporting/output only.
     DDStats run_summary;
     run_summary.original_width = original_width;
@@ -391,7 +384,6 @@ int main(int argc, char *argv[])
     enumeration_stats->cpu_dominance_s = ((double)enumeration_stats->cpu_ticks_dominance) / CLOCKS_PER_SEC;
     enumeration_stats->wall_compile_s = compilation_wall_s;
     enumeration_stats->wall_enumeration_s = pareto_wall_enumeration_s;
-    enumeration_stats->wall_total_end_to_end_s = wall_total_end_to_end_s;
 
     print_and_save_run_summary(options, enumeration_stats, run_summary, pareto_frontier);
 

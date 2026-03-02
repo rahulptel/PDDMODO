@@ -180,7 +180,6 @@ bool write_stats_jsonl(const string &out_path,
     const double cpu_dominance_s = stats != NULL ? stats->cpu_dominance_s : 0.0;
     const double wall_compile_s = stats != NULL ? stats->wall_compile_s : 0.0;
     const double wall_enumeration_s = stats != NULL ? stats->wall_enumeration_s : 0.0;
-    const double wall_total_end_to_end_s = stats != NULL ? stats->wall_total_end_to_end_s : 0.0;
     const double kernel_expand_td_s = stats != NULL ? stats->kernel_expand_td_s : 0.0;
     const double kernel_dominance_s = stats != NULL ? stats->kernel_dominance_s : 0.0;
     const double kernel_total_s = stats != NULL ? stats->kernel_total_s : 0.0;
@@ -220,8 +219,7 @@ bool write_stats_jsonl(const string &out_path,
     out << "},";
     out << "\"wall\":{";
     out << "\"wall_compile_s\":" << wall_compile_s << ",";
-    out << "\"wall_enumeration_s\":" << wall_enumeration_s << ",";
-    out << "\"wall_total_end_to_end_s\":" << wall_total_end_to_end_s;
+    out << "\"wall_enumeration_s\":" << wall_enumeration_s;
     out << "},";
     out << "\"kernel\":{";
     out << "\"kernel_expand_td_s\":" << kernel_expand_td_s << ",";
@@ -305,7 +303,6 @@ void print_and_save_run_summary(const CliOptions &opts,
         const double cpu_enumeration_s = enumeration_stats != NULL ? enumeration_stats->cpu_enumeration_s : 0.0;
         const double wall_compile_s = enumeration_stats != NULL ? enumeration_stats->wall_compile_s : 0.0;
         const double wall_enumeration_s = enumeration_stats != NULL ? enumeration_stats->wall_enumeration_s : 0.0;
-        const double wall_total_end_to_end_s = enumeration_stats != NULL ? enumeration_stats->wall_total_end_to_end_s : 0.0;
 
         cout << (enumeration_stats != NULL ? enumeration_stats->num_solutions : pareto_frontier->get_num_sols()) << endl;
         cout << cpu_total_s << endl;
@@ -313,7 +310,6 @@ void print_and_save_run_summary(const CliOptions &opts,
         cout << "\t" << cpu_enumeration_s;
         cout << "\t" << wall_compile_s;
         cout << "\t" << wall_enumeration_s;
-        cout << "\t" << wall_total_end_to_end_s;
         cout << endl;
     }
     else
@@ -326,7 +322,6 @@ void print_and_save_run_summary(const CliOptions &opts,
         const double cpu_total_s = enumeration_stats != NULL ? enumeration_stats->cpu_total_s : 0.0;
         const double wall_compile_s = enumeration_stats != NULL ? enumeration_stats->wall_compile_s : 0.0;
         const double wall_enumeration_s = enumeration_stats != NULL ? enumeration_stats->wall_enumeration_s : 0.0;
-        const double wall_total_end_to_end_s = enumeration_stats != NULL ? enumeration_stats->wall_total_end_to_end_s : 0.0;
 
         cout << (enumeration_stats != NULL ? enumeration_stats->num_solutions : pareto_frontier->get_num_sols()) << endl;
         cout << cpu_total_s << endl;
@@ -344,7 +339,6 @@ void print_and_save_run_summary(const CliOptions &opts,
         cout << "\t" << cpu_dominance_s;
         cout << "\t" << wall_compile_s;
         cout << "\t" << wall_enumeration_s;
-        cout << "\t" << wall_total_end_to_end_s;
         cout << endl;
     }
 
