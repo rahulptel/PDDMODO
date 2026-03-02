@@ -105,7 +105,7 @@ JSONL schema notes (`--save-stats`):
   - `work`
   - `dominance`
   - `structure`
-  - `perf`
+  - `metrics`
   - `status`
 - `timing` uses `cpu_*` and `wall_*` naming.
 - `memory` contains:

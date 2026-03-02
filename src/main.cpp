@@ -169,7 +169,6 @@ int main(int argc, char *argv[])
 
         // Solver-owned stats populated during frontier enumeration.
         EnumerationStats *enumeration_stats = new EnumerationStats;
-        enumeration_stats->cpu_perf_enabled = (backend == BACKEND_CPU) && save_stats;
         ParetoFrontier *pareto_frontier = NULL;
 
         if (method == 1) { // Top-down
@@ -261,7 +260,6 @@ int main(int argc, char *argv[])
     // Initialize enumeration stats
     // Solver-owned stats populated during frontier enumeration.
     EnumerationStats *enumeration_stats = new EnumerationStats;
-    enumeration_stats->cpu_perf_enabled = (backend == BACKEND_CPU) && save_stats;
 
     // Compute pareto frontier based on methodology
     // cout << "\n\nComputing pareto frontier..." << endl;

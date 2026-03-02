@@ -260,7 +260,7 @@ bool write_stats_jsonl(const string &out_path,
     out << "\"layer_coupling\":" << layer_coupling;
     out << "},";
 
-    out << "\"perf\":{";
+    out << "\"metrics\":{";
     out << "\"wall_state_dominance_s\":" << (stats != NULL ? stats->wall_state_dominance_s : 0.0) << ",";
     out << "\"wall_cutset_sort_s\":" << (stats != NULL ? stats->wall_cutset_sort_s : 0.0) << ",";
     out << "\"wall_cutset_convolution_s\":" << (stats != NULL ? stats->wall_cutset_convolution_s : 0.0) << ",";

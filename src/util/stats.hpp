@@ -21,8 +21,6 @@ struct EnumerationStats {
     int dominance_filtered_total;
     // Layer where coupling happened
     int layer_coupling;
-    // Enable lightweight CPU performance aggregation
-    bool cpu_perf_enabled;
     // Number of Pareto solutions produced by the run
     int num_solutions;
 
@@ -70,7 +68,6 @@ struct EnumerationStats {
         : cpu_state_dominance_s(0.0),
           dominance_filtered_total(0),
           layer_coupling(0),
-          cpu_perf_enabled(false),
           num_solutions(0),
           cpu_compile_s(0.0),
           cpu_enumeration_s(0.0),
