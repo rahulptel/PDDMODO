@@ -52,18 +52,33 @@ CFLAGS  += $(CCOPT)
 
 # number of objective functions
 NUM_OBJS=3
+ENABLE_CUDA ?= 1
+ENABLE_OPENMP ?= 1
+
 CFLAGS += -DNOBJS=$(NUM_OBJS)
+
+ifeq ($(ENABLE_OPENMP),1)
+CFLAGS += -fopenmp
+LDFLAGS += -fopenmp
+endif
+
+ifeq ($(ENABLE_CUDA),1)
 CFLAGS += -DUSE_CUDA
 CUDAFLAGS = -std=c++14 -O3 -DUSE_CUDA -DNOBJS=$(NUM_OBJS) -I$(BOOSTDIR)/include
 LDFLAGS += -lcudart
+endif
 
 EXECUTABLE = multiobj_nobjs$(NUM_OBJS)
 
+ifneq ($(filter clean,$(MAKECMDGOALS)),clean)
+ifeq ($(ENABLE_CUDA),1)
 ifeq ($(NVCC_MAJOR),)
 $(error could not detect nvcc version from '$(NVCC)'. Please install/configure nvcc >= 12)
 endif
 ifeq ($(shell [ $(NVCC_MAJOR) -lt 12 ] && echo 1 || echo 0),1)
 $(error nvcc >= 12 required for CUDA build; detected nvcc $(NVCC_MAJOR) at '$(NVCC)'. Use /usr/local/cuda/bin/nvcc)
+endif
+endif
 endif
 
 
@@ -75,12 +90,18 @@ SRC_DIRS  := $(shell find $(SRC_DIR) -type d)
 OBJ_DIRS  := $(addprefix $(OBJ_DIR)/,$(SRC_DIRS))
 
 SOURCES_CPP := $(shell find $(SRC_DIR) -name '*.cpp')
+SOURCES_CPP := $(filter-out src/cuda/cuda_stubs.cpp, $(SOURCES_CPP))
 
 OBJ_FILES   := $(addprefix $(OBJ_DIR)/, $(SOURCES_CPP:.cpp=.o))
+ifeq ($(ENABLE_CUDA),1)
 CUDA_SOURCES  := $(shell find $(SRC_DIR) -name '*.cu')
 CUDA_OBJ_FILES := $(addprefix $(OBJ_DIR)/, $(CUDA_SOURCES:.cu=.o))
 OBJ_FILES     += $(CUDA_OBJ_FILES)
 vpath %.cu $(SRC_DIRS)
+else
+STUB_SOURCES := src/cuda/cuda_stubs.cpp
+OBJ_FILES   += $(addprefix $(OBJ_DIR)/, $(STUB_SOURCES:.cpp=.o))
+endif
 
 vpath %.cpp $(SRC_DIRS)
 

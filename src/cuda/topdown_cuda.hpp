@@ -12,7 +12,8 @@
 #include "../bdd/pareto_frontier.hpp"
 #include <thrust/device_vector.h>
 
-struct MultiObjectiveStats;
+struct EnumerationStats;
+using MultiObjectiveStats = EnumerationStats;
 
 // Checks whether at least one CUDA device is available.
 bool topdown_cuda_available(std::string* reason);
@@ -26,8 +27,8 @@ bool topdown_cuda_available(std::string* reason);
 ParetoFrontier* topdown_cuda_enumerate(BDD* bdd,
                                        bool maximization,
                                        const int problem_type,
-                                       const int dominance_strategy,
-                                       MultiObjectiveStats* stats,
+                                       const int state_dominance,
+                                       EnumerationStats* stats,
                                        std::string* reason,
                                        int kernel_version = 3);
 
@@ -35,7 +36,7 @@ ParetoFrontier* topdown_cuda_enumerate(BDD* bdd,
 // Returns NULL on failure and fills reason when provided.
 // Uses the same kernel_version mapping as topdown_cuda_enumerate().
 ParetoFrontier* topdown_mdd_cuda_enumerate(MDD* mdd,
-                                           MultiObjectiveStats* stats,
+                                           EnumerationStats* stats,
                                            std::string* reason,
                                            int kernel_version = 3);
 
@@ -85,6 +86,11 @@ bool expand_layer_cuda(
     thrust::device_vector<int>& d_next_offsets,
     thrust::device_vector<ObjType>& d_next_points,
     std::string* reason,
-    int kernel_version = 3);
+    int kernel_version = 3,
+    long long* total_candidates_out = NULL,
+    long long* total_next_out = NULL,
+    long long* gpu_mem_baseline_used_bytes = NULL,
+    long long* gpu_mem_peak_used_bytes = NULL,
+    long long* gpu_mem_peak_reserved_bytes = NULL);
 
 #endif

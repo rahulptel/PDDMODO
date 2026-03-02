@@ -10,7 +10,8 @@
 #include "../mdd/mdd.hpp"
 #include "../bdd/pareto_frontier.hpp"
 
-struct MultiObjectiveStats;
+struct EnumerationStats;
+using MultiObjectiveStats = EnumerationStats;
 
 // Checks whether at least one CUDA device is available.
 bool coupled_cuda_available(std::string* reason);
@@ -22,7 +23,7 @@ bool coupled_cuda_available(std::string* reason);
 //   2 = fixed number of blocks per node (2D grid)
 //   3 = dynamic number of blocks per node (1D grid + binary-search destination lookup)
 ParetoFrontier* coupled_cuda_enumerate(MDD* mdd,
-                                       MultiObjectiveStats* stats,
+                                       EnumerationStats* stats,
                                        std::string* reason,
                                        int kernel_version = 3);
 

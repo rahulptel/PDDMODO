@@ -7,12 +7,17 @@
 #include <cstdlib>
 #include <string>
 #include <cstdio>
+#include <chrono>
+#include <iomanip>
+#include <fstream>
 
 #include "bdd/bdd.hpp"
 #include "bdd/bdd_alg.hpp"
 #include "bdd/bdd_multiobj.hpp"
+#include "util/cli_parser.hpp"
 #include "util/stats.hpp"
 #include "util/util.hpp"
+#include "util/output_utils.hpp"
 #include "bdd/pareto_frontier.hpp"
 
 // Knapsack includes
@@ -24,319 +29,47 @@
 #include "instances/setpacking_instance.hpp"
 #include "bdd/indepset_bdd.hpp"
 
-// Set covering includes
-#include "instances/setcovering_instance.hpp"
-#include "bdd/setcovering_bdd.hpp"
-
 // TSP instance
 #include "instances/tsp_instance.hpp"
 #include "mdd/tsp_mdd.hpp"
 
 using namespace std;
 
-static string shell_single_quote(const string &value)
-{
-    string quoted = "'";
-    for (char c : value)
-    {
-        if (c == '\'')
-        {
-            quoted += "'\"'\"'";
-        }
-        else
-        {
-            quoted += c;
-        }
-    }
-    quoted += "'";
-    return quoted;
-}
 
-static string derive_default_frontier_path(const string &input_path)
-{
-    string base = input_path;
-    size_t slash_pos = base.find_last_of("/\\");
-    if (slash_pos != string::npos)
-    {
-        base = base.substr(slash_pos + 1);
-    }
-
-    size_t dot_pos = base.find_last_of('.');
-    if (dot_pos != string::npos)
-    {
-        base = base.substr(0, dot_pos);
-    }
-
-    if (base.empty())
-    {
-        base = "frontier";
-    }
-
-    return base + ".frontier.csv.gz";
-}
-
-static bool write_frontier_gzip_csv(const ParetoFrontier *frontier, const int problem_type, const string &out_path, string *error)
-{
-    if (frontier == NULL)
-    {
-        if (error != NULL)
-        {
-            *error = "frontier is null";
-        }
-        return false;
-    }
-
-    if (out_path.empty())
-    {
-        if (error != NULL)
-        {
-            *error = "output path is empty";
-        }
-        return false;
-    }
-
-    if (frontier->sols.size() % NOBJS != 0)
-    {
-        if (error != NULL)
-        {
-            *error = "frontier has invalid dimension";
-        }
-        return false;
-    }
-
-    const string command = "gzip -c > " + shell_single_quote(out_path);
-    FILE *pipe = popen(command.c_str(), "w");
-    if (pipe == NULL)
-    {
-        if (error != NULL)
-        {
-            *error = "could not launch gzip";
-        }
-        return false;
-    }
-
-    bool ok = true;
-    for (size_t i = 0; i < frontier->sols.size() && ok; i += NOBJS)
-    {
-        for (int o = 0; o < NOBJS; ++o)
-        {
-            ObjType value = frontier->sols[i + o];
-            if (problem_type == 3)
-            {
-                value = -value;
-            }
-
-            if (o > 0 && fputc(',', pipe) == EOF)
-            {
-                ok = false;
-                break;
-            }
-            if (fprintf(pipe, "%d", value) < 0)
-            {
-                ok = false;
-                break;
-            }
-        }
-        if (ok && fputc('\n', pipe) == EOF)
-        {
-            ok = false;
-        }
-    }
-
-    int close_status = pclose(pipe);
-    if (!ok)
-    {
-        if (error != NULL)
-        {
-            *error = "failed while writing compressed frontier";
-        }
-        return false;
-    }
-
-    if (close_status != 0)
-    {
-        if (error != NULL)
-        {
-            *error = "gzip exited with non-zero status";
-        }
-        return false;
-    }
-
-    return true;
-}
 
 //
 // Main function
 //
 int main(int argc, char *argv[])
 {
-    enum Backend
+    CliOptions options;
+    string parse_error;
+    if (!parse_cli_args(argc, argv, &options, &parse_error))
     {
-        BACKEND_CPU = 0,
-        BACKEND_CUDA = 1
-    };
-
-    auto print_usage = []()
-    {
-        cout << '\n';
-        cout << "Usage: multiobj_nobjs<NUM_OBJS> [input file] [problem type] [preprocess?] [method] [appr-S] [appr-T] [dominance] [backend] [kernel_version] [--save-frontier] [--frontier-out <path>]\n";
-
-        cout << "\n\twhere:";
-
-        cout << "\n";
-        cout << "\t\tproblem_type = 1: knapsack\n";
-        cout << "\t\tproblem_type = 2: set packing\n";
-        cout << "\t\tproblem_type = 3: set covering\n";
-        cout << "\t\tproblem_type = 4: TSP\n";
-
-        cout << "\n";
-        cout << "\t\tpreprocess = 0: do not preprocess instance\n";
-        cout << "\t\tpreprocess = 1: preprocess input to minimize BDD size\n";
-
-        cout << "\n";
-        cout << "\t\tmethod = 1: top-down BFS\n";
-        cout << "\t\tmethod = 2: bottom-up BFS\n";
-        cout << "\t\tmethod = 3: dynamic layer cutset\n";
-
-        cout << "\n";
-        cout << "\t\tapprox = n m: approximate n-sized S set and m-sized T set (n=0 if disabled)\n";
-
-        cout << "\n";
-        cout << "\t\tdominance = 0:  disable state dominance\n";
-        cout << "\t\tdominance = 1:  state dominance strategy 1\n";
-
-        cout << "\n";
-        cout << "\t\tbackend = cpu: force CPU pareto frontier enumeration\n";
-        cout << "\t\tbackend = cuda: force CUDA pareto frontier enumeration (method 1 only)\n";
-        cout << "\t\tbackend omitted: defaults to cpu\n";
-
-        cout << "\n";
-        cout << "\t\tkernel_version = 1: one block per node\n";
-        cout << "\t\tkernel_version = 2: fixed number of blocks per node (2D grid)\n";
-        cout << "\t\tkernel_version = 3: dynamic blocks per node with binary-search destination lookup (1D grid)\n";
-        cout << "\t\tkernel_version omitted with backend=cuda: defaults by problem type\n";
-        cout << "\t\t\tproblem_type=1 (knapsack): 1\n";
-        cout << "\t\t\tproblem_type=2 (set packing): 2\n";
-        cout << "\t\t\tproblem_type=3 (set covering): 1\n";
-        cout << "\t\t\tproblem_type=4 (TSP): 3\n";
-
-        cout << "\n";
-        cout << "\t\t--save-frontier: save Pareto frontier to <input_stem>.frontier.csv.gz\n";
-        cout << "\t\t--frontier-out <path>: save Pareto frontier to explicit gzip CSV path\n";
-        cout << "\t\toptional arguments can be provided in any order\n";
-
-        cout << endl;
-    };
-
-    if (argc < 8)
-    {
+        if (!parse_error.empty())
+        {
+            cout << parse_error << endl;
+        }
         print_usage();
         exit(1);
     }
 
-    // Read input
-    int problem_type = atoi(argv[2]);
-    bool preprocess = (argv[3][0] == '1');
-    int method = atoi(argv[4]);
+    const string input_path = options.input_path;
+    const int problem_type = options.problem_type;
+    const int method = options.method;
     bool maximization = true;
-    int approx_S = atoi(argv[5]);
-    int approx_T = atoi(argv[6]);
-    int dominance = atoi(argv[7]);
+    const int state_dominance = options.state_dominance;
+    const Backend backend = options.backend;
+    const int kernel_version = options.kernel_version;
+    const int cpu_threads = options.cpu_threads;
+    const int cpu_kernel = options.cpu_kernel;
+    const bool save_frontier = options.save_frontier;
+    const string frontier_out_path = options.frontier_out_path;
+    const bool save_stats = options.save_stats;
+    const string stats_out_path = options.stats_out_path;
 
-    Backend backend = BACKEND_CPU;
-    int kernel_version = -1;
-    bool kernel_version_set = false;
-
-    bool save_frontier = false;
-    string frontier_out_path;
-
-    for (int i = 8; i < argc; ++i)
-    {
-        string token(argv[i]);
-        if (token == "cpu")
-        {
-            backend = BACKEND_CPU;
-        }
-        else if (token == "cuda")
-        {
-            backend = BACKEND_CUDA;
-        }
-        else if (token == "1" || token == "2" || token == "3")
-        {
-            if (kernel_version_set)
-            {
-                cout << "Error - kernel_version provided multiple times." << endl;
-                print_usage();
-                exit(1);
-            }
-            kernel_version = atoi(token.c_str());
-            kernel_version_set = true;
-        }
-        else if (token == "--save-frontier")
-        {
-            save_frontier = true;
-        }
-        else if (token == "--frontier-out")
-        {
-            if (i + 1 >= argc)
-            {
-                cout << "Error - --frontier-out requires a file path." << endl;
-                print_usage();
-                exit(1);
-            }
-            frontier_out_path = argv[++i];
-            if (frontier_out_path.empty())
-            {
-                cout << "Error - --frontier-out path cannot be empty." << endl;
-                exit(1);
-            }
-            save_frontier = true;
-        }
-        else
-        {
-            cout << "Error - unrecognized optional argument '" << token << "'." << endl;
-            print_usage();
-            exit(1);
-        }
-    }
-
-    if (save_frontier && frontier_out_path.empty())
-    {
-        frontier_out_path = derive_default_frontier_path(argv[1]);
-    }
-
-    if (backend == BACKEND_CUDA && !kernel_version_set)
-    {
-        if (problem_type == 1 || problem_type == 3)
-        {
-            kernel_version = 1;
-        }
-        else if (problem_type == 2)
-        {
-            kernel_version = 2;
-        }
-        else if (problem_type == 4)
-        {
-            kernel_version = 3;
-        }
-        else
-        {
-            cout << "Error - problem type not recognized" << endl;
-            exit(1);
-        }
-    }
-
-    if (backend == BACKEND_CUDA && method != 1 && method != 3)
-    {
-        cout << "Error - CUDA backend is unsupported for method " << method << "." << endl;
-        exit(1);
-    }
-
-    // For statistical analysis
-    Stats timers;
-    int bdd_compilation_time = timers.register_name("BDD compilation time");
-    int pareto_time = timers.register_name("BDD pareto time");
-    int approx_time = timers.register_name("BDD approximation time");
+    typedef std::chrono::steady_clock WallClock;
+    const WallClock::time_point run_wall_begin = WallClock::now();
     long int original_width;
     long int reduced_width;
     long int original_num_nodes;
@@ -345,7 +78,8 @@ int main(int argc, char *argv[])
     // Read problem instance and construct BDD
     BDD *bdd = NULL;
     vector<vector<int>> obj_coeffs;
-    timers.start_timer(bdd_compilation_time);
+    const WallClock::time_point compilation_wall_begin = WallClock::now();
+    const clock_t compilation_cpu_begin = clock();
 
     // --- Knapsack ---
     if (problem_type == 1)
@@ -353,12 +87,7 @@ int main(int argc, char *argv[])
 
         // Read instance
         KnapsackInstance inst;
-        inst.read(argv[1]);
-
-        // if (preprocess) {
-        //     // Reorder variables
-        //     inst.reorder_coefficients();
-        // }
+        inst.read(const_cast<char *>(input_path.c_str()));
 
         // Construct BDD
         KnapsackBDDConstructor bddCons(&inst);
@@ -381,16 +110,6 @@ int main(int argc, char *argv[])
         // Update node weights
         bddCons.update_node_weights(bdd);
 
-        // Compute approximation
-        if (approx_S != 0)
-        {
-            timers.start_timer(approx_time);
-            // BDDMultiObj::approximate_pareto_frontier_bottomup(bdd, approx_S, approx_T);
-            // BDDMultiObj::approximate_pareto_frontier_topdown(bdd, approx_S, approx_T);
-            // BDDMultiObj::approximate_pareto_frontier_topdown_dominance(bdd, approx_S, approx_T);
-            timers.end_timer(approx_time);
-        }
-
         // Reduce BDD
         BDDAlg::reduce(bdd);
 
@@ -410,7 +129,7 @@ int main(int argc, char *argv[])
     {
 
         // read instance
-        SetPackingInstance setpack(argv[1]);
+        SetPackingInstance setpack(input_path.c_str());
 
         // create associated independent set instance
         IndepSetInst *inst = setpack.create_indepset_instance();
@@ -426,45 +145,15 @@ int main(int argc, char *argv[])
         reduced_num_nodes = bdd->get_num_nodes();
     }
 
-    // --- Set Covering ---
+    // --- TSP ---
     else if (problem_type == 3)
     {
-        // set objective sense
-        maximization = false;
-
-        // read instance
-        SetCoveringInstance setcover(argv[1]);
-
-        // preprocess
-        if (preprocess)
-        {
-            setcover.minimize_bandwidth();
-        }
-
-        // create BDD
-        SetCoveringBDDConstructor bddConstructor(&setcover, setcover.objs);
-        bdd = bddConstructor.generate_exact();
-
-        original_width = bdd->get_width();
-        original_num_nodes = bdd->get_num_nodes();
-
-        // Reduce BDD
-        // BDDAlg::reduce(bdd);
-
-        reduced_width = bdd->get_width();
-        reduced_num_nodes = bdd->get_num_nodes();
-
-        // --- TSP ---
-    }
-    else if (problem_type == 4)
-    {
-        clock_t init_tsp = clock();
-
         // Read instance
         TSPInstance inst;
-        inst.read(argv[1]);
+        inst.read(input_path.c_str());
 
         // Construct MDD
+        const WallClock::time_point compilation_tsp_wall_begin = WallClock::now();
         clock_t compilation_tsp = clock();
 
         MDDTSPConstructor mddCons(&inst);
@@ -472,50 +161,56 @@ int main(int argc, char *argv[])
         assert(mdd != NULL);
 
         compilation_tsp = clock() - compilation_tsp;
+        const double compilation_tsp_wall_s = std::chrono::duration_cast<std::chrono::duration<double> >(WallClock::now() - compilation_tsp_wall_begin).count();
 
-        // Generate frontier
-        clock_t frontier_tsp = clock();
+        // Generate frontier (timed region excludes final lexicographic sort)
+        const WallClock::time_point pareto_tsp_wall_begin = WallClock::now();
+        clock_t pareto_tsp_cpu = clock();
 
-        MultiObjectiveStats *statsMultiObj = new MultiObjectiveStats;
+        // Solver-owned stats populated during frontier enumeration.
+        EnumerationStats *enumeration_stats = new EnumerationStats;
         ParetoFrontier *pareto_frontier = NULL;
 
         if (method == 1) { // Top-down
-            if (backend == BACKEND_CUDA) {
+            if (backend == BACKEND_GPU) {
                 string cuda_reason;
-                pareto_frontier = BDDMultiObj::pareto_frontier_topdown_cuda(mdd, statsMultiObj, &cuda_reason, kernel_version);
+                pareto_frontier = BDDMultiObj::pareto_frontier_topdown_cuda(mdd, enumeration_stats, &cuda_reason, kernel_version);
                 if (pareto_frontier == NULL) {
-                    cout << "Error - CUDA backend requested but top-down enumeration failed";
+                    cout << "Error - GPU backend requested but top-down enumeration failed";
                     if (!cuda_reason.empty()) cout << ": " << cuda_reason;
                     cout << endl;
                     exit(1);
                 }
             } else {
-                pareto_frontier = BDDMultiObj::pareto_frontier_topdown(mdd, statsMultiObj);
+                pareto_frontier = BDDMultiObj::pareto_frontier_topdown(mdd, enumeration_stats, cpu_threads, cpu_kernel);
             }
         } else if (method == 3) { // Coupled
-            if (backend == BACKEND_CUDA) {
+            if (backend == BACKEND_GPU) {
                 string cuda_reason;
-                pareto_frontier = BDDMultiObj::pareto_frontier_dynamic_layer_cutset_cuda(mdd, statsMultiObj, &cuda_reason, kernel_version);
+                pareto_frontier = BDDMultiObj::pareto_frontier_dynamic_layer_cutset_cuda(mdd, enumeration_stats, &cuda_reason, kernel_version);
                 if (pareto_frontier == NULL) {
-                    cout << "Error - CUDA backend requested but coupled enumeration failed";
+                    cout << "Error - GPU backend requested but coupled enumeration failed";
                     if (!cuda_reason.empty()) cout << ": " << cuda_reason;
                     cout << endl;
                     exit(1);
                 }
             } else {
-                pareto_frontier = BDDMultiObj::pareto_frontier_dynamic_layer_cutset(mdd, statsMultiObj);
+                pareto_frontier = BDDMultiObj::pareto_frontier_dynamic_layer_cutset(mdd, enumeration_stats, cpu_threads, cpu_kernel);
             }
         } else {
             cout << "Error - method " << method << " not valid for TSP" << endl;
             exit(1);
         }
+        pareto_tsp_cpu = clock() - pareto_tsp_cpu;
+        const double pareto_tsp_wall_enumeration_s = std::chrono::duration_cast<std::chrono::duration<double> >(WallClock::now() - pareto_tsp_wall_begin).count();
 
         assert(pareto_frontier != NULL);
+        pareto_frontier->sort_lexicographic_ascending();
 
         if (save_frontier)
         {
             string save_error;
-            if (!write_frontier_gzip_csv(pareto_frontier, problem_type, frontier_out_path, &save_error))
+            if (!write_frontier_gzip_csv(pareto_frontier, frontier_out_path, &save_error))
             {
                 cout << "Error - failed to save frontier to '" << frontier_out_path << "'";
                 if (!save_error.empty())
@@ -527,13 +222,22 @@ int main(int argc, char *argv[])
             }
         }
 
-        frontier_tsp = clock() - frontier_tsp;
+        // Run-level summary assembled in main for reporting/output only.
+        DDStats run_summary;
+        run_summary.original_width = -1;
+        run_summary.reduced_width = -1;
+        run_summary.original_num_nodes = -1;
+        run_summary.reduced_num_nodes = -1;
 
-        cout << pareto_frontier->get_num_sols() << endl;
-        cout << (double)(compilation_tsp + frontier_tsp) / CLOCKS_PER_SEC << endl;
-        cout << (double)compilation_tsp / CLOCKS_PER_SEC;
-        cout << "\t" << frontier_tsp / CLOCKS_PER_SEC;
-        cout << endl;
+        enumeration_stats->num_solutions = pareto_frontier->get_num_sols();
+        enumeration_stats->cpu_compile_s = ((double)compilation_tsp) / CLOCKS_PER_SEC;
+        enumeration_stats->cpu_enumeration_s = ((double)pareto_tsp_cpu) / CLOCKS_PER_SEC;
+        enumeration_stats->cpu_total_s = enumeration_stats->cpu_compile_s + enumeration_stats->cpu_enumeration_s;
+        enumeration_stats->wall_compile_s = compilation_tsp_wall_s;
+        enumeration_stats->wall_enumeration_s = pareto_tsp_wall_enumeration_s;
+        enumeration_stats->cpu_mem_peak_bytes = get_cpu_peak_memory_bytes();
+
+        print_and_save_run_summary(options, enumeration_stats, run_summary, pareto_frontier);
 
         return 0;
     }
@@ -543,33 +247,36 @@ int main(int argc, char *argv[])
         exit(1);
     }
 
-    timers.end_timer(bdd_compilation_time);
+    const clock_t compilation_cpu_elapsed = clock() - compilation_cpu_begin;
+    const double compilation_wall_s = std::chrono::duration_cast<std::chrono::duration<double> >(WallClock::now() - compilation_wall_begin).count();
 
     // cout << "\nBDD Info:\n";
     // cout << "\tOriginal width: " << original_width << endl;
     // cout << "\tOriginal number of nodes: " << original_num_nodes << endl;
     // cout << "\n\tReduced width: " << reduced_width << endl;
     // cout << "\tReduced number of nodes: " << reduced_num_nodes << endl;
-    // cout << "\n\tBDD compilation total time: " << timers.get_time(bdd_compilation_time) << endl;
+    // cout << "\n\tBDD compilation total time: " << ((double)compilation_cpu_elapsed)/CLOCKS_PER_SEC << endl;
 
-    // Initialize multiobjective stats
-    MultiObjectiveStats *statsMultiObj = new MultiObjectiveStats;
+    // Initialize enumeration stats
+    // Solver-owned stats populated during frontier enumeration.
+    EnumerationStats *enumeration_stats = new EnumerationStats;
 
     // Compute pareto frontier based on methodology
     // cout << "\n\nComputing pareto frontier..." << endl;
     ParetoFrontier *pareto_frontier = NULL;
-    timers.start_timer(pareto_time);
+    const WallClock::time_point pareto_wall_begin = WallClock::now();
+    const clock_t pareto_cpu_begin = clock();
 
     if (method == 1)
     {
         // -- Optimal BFS algorithm: top-down --
-        if (backend == BACKEND_CUDA)
+        if (backend == BACKEND_GPU)
         {
             string cuda_reason;
-            pareto_frontier = BDDMultiObj::pareto_frontier_topdown_cuda(bdd, maximization, problem_type, dominance, statsMultiObj, &cuda_reason, kernel_version);
+            pareto_frontier = BDDMultiObj::pareto_frontier_topdown_cuda(bdd, maximization, problem_type, state_dominance, enumeration_stats, &cuda_reason, kernel_version);
             if (pareto_frontier == NULL)
             {
-                cout << "Error - CUDA backend requested but top-down enumeration failed";
+                cout << "Error - GPU backend requested but top-down enumeration failed";
                 if (!cuda_reason.empty())
                 {
                     cout << ": " << cuda_reason;
@@ -580,28 +287,28 @@ int main(int argc, char *argv[])
         }
         else
         {
-            pareto_frontier = BDDMultiObj::pareto_frontier_topdown(bdd, maximization, problem_type, dominance, statsMultiObj);
+            pareto_frontier = BDDMultiObj::pareto_frontier_topdown(bdd, maximization, problem_type, state_dominance, enumeration_stats, cpu_threads, cpu_kernel);
         }
     }
     else if (method == 2)
     {
         // -- Optimal BFS algorithm: bottom-up --
-        if (backend == BACKEND_CUDA)
+        if (backend == BACKEND_GPU)
         {
-            cout << "Error - CUDA backend is unsupported for method 2." << endl;
+            cout << "Error - GPU backend is unsupported for method 2." << endl;
             exit(1);
         }
-        pareto_frontier = BDDMultiObj::pareto_frontier_bottomup(bdd, maximization, problem_type, dominance, statsMultiObj);
+        pareto_frontier = BDDMultiObj::pareto_frontier_bottomup(bdd, maximization, problem_type, state_dominance, enumeration_stats, cpu_threads);
     }
     else if (method == 3)
     {
         // -- Dynamic layer cutset --
-        if (backend == BACKEND_CUDA)
+        if (backend == BACKEND_GPU)
         {
-            cout << "Error - CUDA backend is unsupported for method 3." << endl;
+            cout << "Error - GPU backend is unsupported for method 3." << endl;
             exit(1);
         }
-        pareto_frontier = BDDMultiObj::pareto_frontier_dynamic_layer_cutset(bdd, maximization, problem_type, dominance, statsMultiObj);
+        pareto_frontier = BDDMultiObj::pareto_frontier_dynamic_layer_cutset(bdd, maximization, problem_type, state_dominance, enumeration_stats, cpu_threads, cpu_kernel);
     }
     else
     {
@@ -614,11 +321,15 @@ int main(int argc, char *argv[])
         cout << "\nError - pareto frontier not computed" << endl;
         exit(1);
     }
+    const clock_t pareto_cpu_elapsed = clock() - pareto_cpu_begin;
+    const double pareto_wall_enumeration_s = std::chrono::duration_cast<std::chrono::duration<double> >(WallClock::now() - pareto_wall_begin).count();
+
+    pareto_frontier->sort_lexicographic_ascending();
 
     if (save_frontier)
     {
         string save_error;
-        if (!write_frontier_gzip_csv(pareto_frontier, problem_type, frontier_out_path, &save_error))
+        if (!write_frontier_gzip_csv(pareto_frontier, frontier_out_path, &save_error))
         {
             cout << "Error - failed to save frontier to '" << frontier_out_path << "'";
             if (!save_error.empty())
@@ -630,16 +341,11 @@ int main(int argc, char *argv[])
         }
     }
 
-    timers.end_timer(pareto_time);
-
-    double total_time = (timers.get_time(bdd_compilation_time) + timers.get_time(approx_time) + timers.get_time(pareto_time));
-
     // cout << "\nPareto frontier: " << endl;
     // cout << "\tNumber of solutions: " << pareto_frontier->get_num_sols() << endl;
-    // cout << "\n\tBDD time: " << timers.get_time(bdd_compilation_time) << endl;
-    // cout << "\tApproximation filtering time: " << timers.get_time(approx_time) << endl;
-    // cout << "\tPareto time: " << timers.get_time(pareto_time) << endl;
-    // cout << "\tTotal time: " << total_time << endl;
+    // cout << "\n\tBDD time: " << ((double)compilation_cpu_elapsed)/CLOCKS_PER_SEC << endl;
+    // cout << "\tPareto time: " << ((double)pareto_cpu_elapsed)/CLOCKS_PER_SEC << endl;
+    // cout << "\tTotal time: " << (((double)(compilation_cpu_elapsed + pareto_cpu_elapsed))/CLOCKS_PER_SEC) << endl;
     // cout << endl;
 
     // cout << "\n\nPareto frontier: " << endl;
@@ -651,36 +357,34 @@ int main(int argc, char *argv[])
     // stats << argv[1];
     // stats << "\t" << problem_type;
     // stats << "\t" << NOBJS;
-    // stats << "\t" << preprocess;
     // stats << "\t" << method;
-    // stats << "\t" << approx_S;
-    // stats << "\t" << approx_T;
     // stats << "\t" << pareto_frontier->get_num_sols();
     // stats << "\t" << original_width;
     // stats << "\t" << original_num_nodes;
     // stats << "\t" << reduced_width;
     // stats << "\t" << reduced_num_nodes;
-    // stats << "\t" << timers.get_time(bdd_compilation_time);
-    // stats << "\t" << timers.get_time(pareto_time);
-    // stats << "\t" << (timers.get_time(bdd_compilation_time) + timers.get_time(pareto_time));
+    // stats << "\t" << ((double)compilation_cpu_elapsed)/CLOCKS_PER_SEC;
+    // stats << "\t" << ((double)pareto_cpu_elapsed)/CLOCKS_PER_SEC;
+    // stats << "\t" << (((double)(compilation_cpu_elapsed + pareto_cpu_elapsed))/CLOCKS_PER_SEC);
     // stats << endl;
     // stats.close();
 
-    cout << pareto_frontier->get_num_sols() << endl;
-    cout << (timers.get_time(bdd_compilation_time) + timers.get_time(pareto_time)) << endl;
+    // Run-level summary assembled in main for reporting/output only.
+    DDStats run_summary;
+    run_summary.original_width = original_width;
+    run_summary.reduced_width = reduced_width;
+    run_summary.original_num_nodes = original_num_nodes;
+    run_summary.reduced_num_nodes = reduced_num_nodes;
 
-    cout << method;
-    cout << "\t" << dominance;
-    cout << "\t" << original_width;
-    cout << "\t" << reduced_width;
-    cout << "\t" << original_num_nodes;
-    cout << "\t" << reduced_num_nodes;
-    cout << "\t" << timers.get_time(bdd_compilation_time);
-    cout << "\t" << timers.get_time(pareto_time);
-    cout << "\t" << statsMultiObj->layer_coupling;
-    cout << "\t" << statsMultiObj->pareto_dominance_filtered;
-    cout << "\t" << ((double)statsMultiObj->pareto_dominance_time) / CLOCKS_PER_SEC;
-    cout << endl;
+    enumeration_stats->num_solutions = pareto_frontier->get_num_sols();
+    enumeration_stats->cpu_compile_s = ((double)compilation_cpu_elapsed) / CLOCKS_PER_SEC;
+    enumeration_stats->cpu_enumeration_s = ((double)pareto_cpu_elapsed) / CLOCKS_PER_SEC;
+    enumeration_stats->cpu_total_s = enumeration_stats->cpu_compile_s + enumeration_stats->cpu_enumeration_s;
+    enumeration_stats->wall_compile_s = compilation_wall_s;
+    enumeration_stats->wall_enumeration_s = pareto_wall_enumeration_s;
+    enumeration_stats->cpu_mem_peak_bytes = get_cpu_peak_memory_bytes();
+
+    print_and_save_run_summary(options, enumeration_stats, run_summary, pareto_frontier);
 
     return 0;
 }

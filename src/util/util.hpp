@@ -12,6 +12,11 @@
 #include <limits>
 #include <boost/dynamic_bitset.hpp>
 
+//
+// System resources
+//
+long long get_cpu_peak_memory_bytes();
+
 
 /**
  * -------------------------------------------------------------

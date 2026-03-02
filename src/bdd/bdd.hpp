@@ -40,13 +40,6 @@ struct Node {
 	int min_weight;
 	// State info for set packing: the set of variables we can still choose
 	boost::dynamic_bitset<> setpack_state;
-    // State info for set covering: the set of constraints we have to cover
-    boost::dynamic_bitset<> setcover_state;
-
-    // S-approximation 
-    ParetoFrontier* pareto_frontier_S;
-    // T-approximation 
-    ParetoFrontier* pareto_frontier_T;
 
 	// Constructor
 	Node(const int _layer, int _index);
