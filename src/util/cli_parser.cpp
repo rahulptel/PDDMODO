@@ -15,7 +15,7 @@ using namespace std;
 CliOptions::CliOptions()
     : problem_type(0),
       method(0),
-      dominance(0),
+      state_dominance(0),
       backend(BACKEND_CPU),
       cpu_threads(1),
       kernel_version(-1),
@@ -104,7 +104,7 @@ const char *backend_to_string(const Backend backend)
 void print_usage()
 {
     cout << '\n';
-    cout << "Usage: multiobj_nobjs<NUM_OBJS> [input file] [problem type] [method] [dominance] [options]\n";
+    cout << "Usage: multiobj_nobjs<NUM_OBJS> [input file] [problem type] [method] [state_dominance] [options]\n";
 
     cout << "\n\twhere:";
 
@@ -119,8 +119,8 @@ void print_usage()
     cout << "\t\tmethod = 3: dynamic layer cutset\n";
 
     cout << "\n";
-    cout << "\t\tdominance = 0:  disable state dominance\n";
-    cout << "\t\tdominance = 1:  state dominance strategy 1\n";
+    cout << "\t\tstate_dominance = 0:  disable state dominance\n";
+    cout << "\t\tstate_dominance = 1:  state dominance strategy 1\n";
 
     cout << "\n";
     cout << "\t\tNamed backend options:\n";
@@ -181,7 +181,7 @@ bool parse_cli_args(int argc, char *argv[], CliOptions *out, string *error)
     opts.input_path = argv[1];
     opts.problem_type = atoi(argv[2]);
     opts.method = atoi(argv[3]);
-    opts.dominance = atoi(argv[4]);
+    opts.state_dominance = atoi(argv[4]);
 
     if (opts.problem_type < 1 || opts.problem_type > 3)
     {

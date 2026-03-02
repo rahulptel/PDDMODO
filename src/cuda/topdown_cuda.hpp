@@ -27,7 +27,7 @@ bool topdown_cuda_available(std::string* reason);
 ParetoFrontier* topdown_cuda_enumerate(BDD* bdd,
                                        bool maximization,
                                        const int problem_type,
-                                       const int dominance_strategy,
+                                       const int state_dominance,
                                        EnumerationStats* stats,
                                        std::string* reason,
                                        int kernel_version = 3);

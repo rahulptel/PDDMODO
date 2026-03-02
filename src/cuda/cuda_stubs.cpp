@@ -6,11 +6,11 @@
 #include "../bdd/bdd.hpp"
 #include "../bdd/bdd_multiobj.hpp"
 
-ParetoFrontier* topdown_cuda_enumerate(BDD* bdd, bool maximization, const int problem_type, const int dominance_strategy, EnumerationStats* stats, std::string* reason, int kernel_version) {
+ParetoFrontier* topdown_cuda_enumerate(BDD* bdd, bool maximization, const int problem_type, const int state_dominance, EnumerationStats* stats, std::string* reason, int kernel_version) {
     (void)bdd;
     (void)maximization;
     (void)problem_type;
-    (void)dominance_strategy;
+    (void)state_dominance;
     (void)stats;
     (void)kernel_version;
     if (reason != NULL) {

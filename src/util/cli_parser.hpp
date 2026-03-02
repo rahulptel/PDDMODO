@@ -18,7 +18,7 @@ struct CliOptions
     std::string input_path;
     int problem_type;
     int method;
-    int dominance;
+    int state_dominance;
     Backend backend;
     int cpu_threads;
     int kernel_version;

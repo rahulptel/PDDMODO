@@ -796,9 +796,9 @@ inline bool apply_knapsack_state_dominance_cuda(BDD* bdd,
 void BDDMultiObj::filter_dominance_cuda(BDD* bdd,
                                         const int layer,
                                         const int problem_type,
-                                        const int dominance_strategy,
+                                        const int state_dominance,
                                         EnumerationStats* stats) {
-    if (dominance_strategy <= 0) {
+    if (state_dominance <= 0) {
         return;
     }
     if (problem_type == 1) {
@@ -839,7 +839,7 @@ bool topdown_cuda_available(std::string* reason) {
 ParetoFrontier* topdown_cuda_enumerate(BDD* bdd,
                                        bool maximization,
                                        const int problem_type,
-                                       const int dominance_strategy,
+                                       const int state_dominance,
                                        EnumerationStats* stats,
                                        std::string* reason,
                                        int kernel_version) {
@@ -883,7 +883,7 @@ ParetoFrontier* topdown_cuda_enumerate(BDD* bdd,
 
     const int first_arc_type = maximization ? 1 : 0;
     const int second_arc_type = maximization ? 0 : 1;
-    const bool pack_knapsack_meta = (problem_type == 1 && dominance_strategy > 0);
+    const bool pack_knapsack_meta = (problem_type == 1 && state_dominance > 0);
     const auto pack_begin = std::chrono::steady_clock::now();
 
     for (int l = 1; l < bdd->num_layers; ++l) {
@@ -1206,7 +1206,7 @@ ParetoFrontier* topdown_cuda_enumerate(BDD* bdd,
             }
         }
 
-        if (dominance_strategy > 0) {
+        if (state_dominance > 0) {
             LayerDominanceContext dom_ctx;
             dom_ctx.next_sizes = &d_next_sizes;
             dom_ctx.next_offsets = &d_next_offsets;
@@ -1220,9 +1220,9 @@ ParetoFrontier* topdown_cuda_enumerate(BDD* bdd,
 
             g_layer_dom_ctx = &dom_ctx;
             clock_t init = clock();
-            BDDMultiObj::filter_dominance_cuda(bdd, l, problem_type, dominance_strategy, stats);
+            BDDMultiObj::filter_dominance_cuda(bdd, l, problem_type, state_dominance, stats);
             if (stats != NULL) {
-                stats->cpu_ticks_dominance += clock() - init;
+                stats->cpu_ticks_state_dominance += clock() - init;
             }
             g_layer_dom_ctx = NULL;
 

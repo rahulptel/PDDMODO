@@ -198,7 +198,7 @@ bool write_stats_jsonl(const string &out_path,
     out << "\"input_path\":\"" << json_escape(opts.input_path) << "\",";
     out << "\"problem_type\":" << opts.problem_type << ",";
     out << "\"method\":" << opts.method << ",";
-    out << "\"dominance\":" << opts.dominance << ",";
+    out << "\"state_dominance\":" << opts.state_dominance << ",";
     out << "\"backend\":\"" << backend_to_string(opts.backend) << "\",";
     out << "\"cpu_threads\":" << opts.cpu_threads << ",";
     out << "\"kernel_version\":" << opts.kernel_version;
@@ -244,7 +244,7 @@ bool write_stats_jsonl(const string &out_path,
 
     out << "\"dominance\":{";
     out << "\"dominance_filtered_total\":" << dominance_filtered_total << ",";
-    out << "\"cpu_ticks_dominance\":" << (stats != NULL ? stats->cpu_ticks_dominance : 0);
+    out << "\"cpu_ticks_state_dominance\":" << (stats != NULL ? stats->cpu_ticks_state_dominance : 0);
     out << "},";
 
     out << "\"structure\":{";
@@ -327,7 +327,7 @@ void print_and_save_run_summary(const CliOptions &opts,
         cout << cpu_total_s << endl;
 
         cout << opts.method;
-        cout << "\t" << opts.dominance;
+        cout << "\t" << opts.state_dominance;
         cout << "\t" << run_summary.original_width;
         cout << "\t" << run_summary.reduced_width;
         cout << "\t" << run_summary.original_num_nodes;

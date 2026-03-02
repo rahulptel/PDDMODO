@@ -16,7 +16,7 @@
 //
 struct EnumerationStats {
     // Time spent in pareto dominance filtering
-    std::clock_t cpu_ticks_dominance;
+    std::clock_t cpu_ticks_state_dominance;
     // Solutions filtered by pareto dominance
     int dominance_filtered_total;
     // Layer where coupling happened
@@ -69,7 +69,7 @@ struct EnumerationStats {
     int cpu_cutset_size;
 
     EnumerationStats()
-        : cpu_ticks_dominance(0),
+        : cpu_ticks_state_dominance(0),
           dominance_filtered_total(0),
           layer_coupling(0),
           cpu_perf_enabled(false),

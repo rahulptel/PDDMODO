@@ -58,7 +58,7 @@ int main(int argc, char *argv[])
     const int problem_type = options.problem_type;
     const int method = options.method;
     bool maximization = true;
-    const int dominance = options.dominance;
+    const int state_dominance = options.state_dominance;
     const Backend backend = options.backend;
     const int kernel_version = options.kernel_version;
     const int cpu_threads = options.cpu_threads;
@@ -233,7 +233,7 @@ int main(int argc, char *argv[])
         enumeration_stats->cpu_compile_s = ((double)compilation_tsp) / CLOCKS_PER_SEC;
         enumeration_stats->cpu_enumeration_s = ((double)pareto_tsp_cpu) / CLOCKS_PER_SEC;
         enumeration_stats->cpu_total_s = enumeration_stats->cpu_compile_s + enumeration_stats->cpu_enumeration_s;
-        enumeration_stats->cpu_dominance_s = ((double)enumeration_stats->cpu_ticks_dominance) / CLOCKS_PER_SEC;
+        enumeration_stats->cpu_dominance_s = ((double)enumeration_stats->cpu_ticks_state_dominance) / CLOCKS_PER_SEC;
         enumeration_stats->wall_compile_s = compilation_tsp_wall_s;
         enumeration_stats->wall_enumeration_s = pareto_tsp_wall_enumeration_s;
 
@@ -274,7 +274,7 @@ int main(int argc, char *argv[])
         if (backend == BACKEND_GPU)
         {
             string cuda_reason;
-            pareto_frontier = BDDMultiObj::pareto_frontier_topdown_cuda(bdd, maximization, problem_type, dominance, enumeration_stats, &cuda_reason, kernel_version);
+            pareto_frontier = BDDMultiObj::pareto_frontier_topdown_cuda(bdd, maximization, problem_type, state_dominance, enumeration_stats, &cuda_reason, kernel_version);
             if (pareto_frontier == NULL)
             {
                 cout << "Error - GPU backend requested but top-down enumeration failed";
@@ -288,7 +288,7 @@ int main(int argc, char *argv[])
         }
         else
         {
-            pareto_frontier = BDDMultiObj::pareto_frontier_topdown(bdd, maximization, problem_type, dominance, enumeration_stats, cpu_threads);
+            pareto_frontier = BDDMultiObj::pareto_frontier_topdown(bdd, maximization, problem_type, state_dominance, enumeration_stats, cpu_threads);
         }
     }
     else if (method == 2)
@@ -299,7 +299,7 @@ int main(int argc, char *argv[])
             cout << "Error - GPU backend is unsupported for method 2." << endl;
             exit(1);
         }
-        pareto_frontier = BDDMultiObj::pareto_frontier_bottomup(bdd, maximization, problem_type, dominance, enumeration_stats, cpu_threads);
+        pareto_frontier = BDDMultiObj::pareto_frontier_bottomup(bdd, maximization, problem_type, state_dominance, enumeration_stats, cpu_threads);
     }
     else if (method == 3)
     {
@@ -309,7 +309,7 @@ int main(int argc, char *argv[])
             cout << "Error - GPU backend is unsupported for method 3." << endl;
             exit(1);
         }
-        pareto_frontier = BDDMultiObj::pareto_frontier_dynamic_layer_cutset(bdd, maximization, problem_type, dominance, enumeration_stats, cpu_threads);
+        pareto_frontier = BDDMultiObj::pareto_frontier_dynamic_layer_cutset(bdd, maximization, problem_type, state_dominance, enumeration_stats, cpu_threads);
     }
     else
     {
@@ -381,7 +381,7 @@ int main(int argc, char *argv[])
     enumeration_stats->cpu_compile_s = ((double)compilation_cpu_elapsed) / CLOCKS_PER_SEC;
     enumeration_stats->cpu_enumeration_s = ((double)pareto_cpu_elapsed) / CLOCKS_PER_SEC;
     enumeration_stats->cpu_total_s = enumeration_stats->cpu_compile_s + enumeration_stats->cpu_enumeration_s;
-    enumeration_stats->cpu_dominance_s = ((double)enumeration_stats->cpu_ticks_dominance) / CLOCKS_PER_SEC;
+    enumeration_stats->cpu_dominance_s = ((double)enumeration_stats->cpu_ticks_state_dominance) / CLOCKS_PER_SEC;
     enumeration_stats->wall_compile_s = compilation_wall_s;
     enumeration_stats->wall_enumeration_s = pareto_wall_enumeration_s;
 
