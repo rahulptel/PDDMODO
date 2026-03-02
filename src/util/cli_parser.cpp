@@ -581,14 +581,6 @@ bool parse_cli_args(int argc, char *argv[], CliOptions *out, string *error)
         }
         return false;
     }
-    if (cpu_topdown_kernel_set && opts.problem_type == 3)
-    {
-        if (error != NULL)
-        {
-            *error = "Error - --cpu-topdown-kernel is currently unsupported for problem_type=3 (TSP).";
-        }
-        return false;
-    }
     if (opts.backend == BACKEND_GPU && cpu_coupled_kernel_set)
     {
         if (error != NULL)
@@ -605,15 +597,6 @@ bool parse_cli_args(int argc, char *argv[], CliOptions *out, string *error)
         }
         return false;
     }
-    if (cpu_coupled_kernel_set && opts.problem_type == 3)
-    {
-        if (error != NULL)
-        {
-            *error = "Error - --cpu-coupled-kernel is currently unsupported for problem_type=3 (TSP).";
-        }
-        return false;
-    }
-
     if (opts.backend == BACKEND_GPU && !kernel_version_set)
     {
         if (opts.problem_type == 1)

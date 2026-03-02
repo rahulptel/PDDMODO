@@ -54,11 +54,11 @@ struct BDDMultiObj {
     // Filter layer based on node completion
     static void filter_completion(BDD* bdd, const int layer);    
 
-    // Find pareto frontier from top-down approach - MDD version
-	static ParetoFrontier* pareto_frontier_topdown(MDD* bdd, EnumerationStats* stats, int cpu_threads = 1);
+	// Find pareto frontier from top-down approach - MDD version
+	static ParetoFrontier* pareto_frontier_topdown(MDD* bdd, EnumerationStats* stats, int cpu_threads = 1, int cpu_topdown_kernel = 1);
 
     // Find pareto frontier using dynamic layer cutset
-    static ParetoFrontier* pareto_frontier_dynamic_layer_cutset(MDD* mdd, EnumerationStats* stats, int cpu_threads = 1);
+    static ParetoFrontier* pareto_frontier_dynamic_layer_cutset(MDD* mdd, EnumerationStats* stats, int cpu_threads = 1, int cpu_coupled_kernel = 1);
 
     // Find pareto frontier using dynamic layer cutset / CUDA
     static ParetoFrontier* pareto_frontier_dynamic_layer_cutset_cuda(MDD* mdd, EnumerationStats* stats = NULL, std::string* reason = NULL, int kernel_version = 3);

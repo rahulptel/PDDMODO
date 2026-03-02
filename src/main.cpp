@@ -184,7 +184,7 @@ int main(int argc, char *argv[])
                     exit(1);
                 }
             } else {
-                pareto_frontier = BDDMultiObj::pareto_frontier_topdown(mdd, enumeration_stats, cpu_threads);
+                pareto_frontier = BDDMultiObj::pareto_frontier_topdown(mdd, enumeration_stats, cpu_threads, cpu_topdown_kernel);
             }
         } else if (method == 3) { // Coupled
             if (backend == BACKEND_GPU) {
@@ -197,7 +197,7 @@ int main(int argc, char *argv[])
                     exit(1);
                 }
             } else {
-                pareto_frontier = BDDMultiObj::pareto_frontier_dynamic_layer_cutset(mdd, enumeration_stats, cpu_threads);
+                pareto_frontier = BDDMultiObj::pareto_frontier_dynamic_layer_cutset(mdd, enumeration_stats, cpu_threads, cpu_coupled_kernel);
             }
         } else {
             cout << "Error - method " << method << " not valid for TSP" << endl;
