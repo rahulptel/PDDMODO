@@ -262,7 +262,7 @@ bool write_stats_jsonl(const string &out_path,
     out << "\"wall_expand_bu_s\":" << (stats != NULL ? stats->wall_expand_bu_s : 0.0) << ",";
     out << "\"wall_recompute_td_s\":" << (stats != NULL ? stats->wall_recompute_td_s : 0.0) << ",";
     out << "\"wall_recompute_bu_s\":" << (stats != NULL ? stats->wall_recompute_bu_s : 0.0) << ",";
-    out << "\"wall_dominance_s\":" << (stats != NULL ? stats->wall_dominance_s : 0.0) << ",";
+    out << "\"wall_state_dominance_s\":" << (stats != NULL ? stats->wall_state_dominance_s : 0.0) << ",";
     out << "\"wall_cutset_sort_s\":" << (stats != NULL ? stats->wall_cutset_sort_s : 0.0) << ",";
     out << "\"wall_cutset_convolution_s\":" << (stats != NULL ? stats->wall_cutset_convolution_s : 0.0) << ",";
     out << "\"wall_cutset_partial_merge_s\":" << (stats != NULL ? stats->wall_cutset_partial_merge_s : 0.0) << ",";

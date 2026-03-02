@@ -52,7 +52,7 @@ inline void reset_cpu_perf_stats(EnumerationStats* stats) {
     stats->wall_expand_bu_s = 0.0;
     stats->wall_recompute_td_s = 0.0;
     stats->wall_recompute_bu_s = 0.0;
-    stats->wall_dominance_s = 0.0;
+    stats->wall_state_dominance_s = 0.0;
     stats->wall_cutset_sort_s = 0.0;
     stats->wall_cutset_convolution_s = 0.0;
     stats->wall_cutset_partial_merge_s = 0.0;
@@ -264,7 +264,7 @@ ParetoFrontier* BDDMultiObj::pareto_frontier_topdown(BDD* bdd, bool maximization
 					BDDMultiObj::filter_dominance(bdd, l, problem_type, state_dominance, stats);
                     stats->cpu_ticks_state_dominance += clock()-init;
                     if (perf_enabled) {
-                        stats->wall_dominance_s += wall_elapsed_s(dominance_begin);
+                        stats->wall_state_dominance_s += wall_elapsed_s(dominance_begin);
                     }
 				}
 
@@ -312,7 +312,7 @@ ParetoFrontier* BDDMultiObj::pareto_frontier_topdown(BDD* bdd, bool maximization
 					BDDMultiObj::filter_dominance(bdd, l, problem_type, state_dominance, stats);
 					stats->cpu_ticks_state_dominance += clock()-init;
                     if (perf_enabled) {
-                        stats->wall_dominance_s += wall_elapsed_s(dominance_begin);
+                        stats->wall_state_dominance_s += wall_elapsed_s(dominance_begin);
                     }
 				}
 
@@ -745,7 +745,7 @@ ParetoFrontier* BDDMultiObj::pareto_frontier_dynamic_layer_cutset(BDD* bdd, bool
 				BDDMultiObj::filter_dominance(bdd, layer_topdown, problem_type, state_dominance, stats);
                 stats->cpu_ticks_state_dominance += clock()-init;
                 if (perf_enabled) {
-                    stats->wall_dominance_s += wall_elapsed_s(dominance_begin);
+                    stats->wall_state_dominance_s += wall_elapsed_s(dominance_begin);
                 }
 			}
             const long long layer_survivors = count_bdd_survivors_topdown_layer(bdd, layer_topdown);
