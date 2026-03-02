@@ -22,6 +22,7 @@
 #include <thrust/reduce.h>
 #include <thrust/scan.h>
 #include <thrust/sort.h>
+#include <thrust/transform.h>
 #include <thrust/functional.h>
 #include <thrust/iterator/counting_iterator.h>
 #include <thrust/iterator/transform_iterator.h>
@@ -73,6 +74,25 @@ inline bool sample_gpu_memory_peak(std::string* reason,
 }
 
 __host__ __device__ inline int ceil_div(int a, int b) { return (a + b - 1) / b; }
+
+struct HasBothFrontiers {
+    const int* td_off;
+    const int* bu_off;
+
+    __host__ __device__ bool operator()(int node) const {
+        return (td_off[node + 1] - td_off[node]) > 0 && (bu_off[node + 1] - bu_off[node]) > 0;
+    }
+};
+
+struct FrontierSumScore {
+    const int* td_off;
+    const int* bu_off;
+
+    __host__ __device__ long long operator()(int node) const {
+        return static_cast<long long>(td_off[node + 1] - td_off[node]) +
+               static_cast<long long>(bu_off[node + 1] - bu_off[node]);
+    }
+};
 
 // ---------------------------------------------------------------
 // Kernels (same patterns as topdown_cuda.cu, adapted for MDD)
@@ -986,33 +1006,47 @@ ParetoFrontier* coupled_cuda_enumerate(MDD* mdd,
     thrust::host_vector<int> h_td_off = d_td_offsets;
     thrust::host_vector<int> h_bu_off = d_bu_offsets;
 
-    int total_td_pts = h_td_off[cutset_nodes];
-    int total_bu_pts = h_bu_off[cutset_nodes];
     long long total_products = 0;
-    int nonzero_nodes = 0;
     for (int i = 0; i < cutset_nodes; ++i) {
         int ts = h_td_off[i+1] - h_td_off[i];
         int bs = h_bu_off[i+1] - h_bu_off[i];
         long long p = (long long)ts * bs;
         total_products += p;
-        if (p > 0) ++nonzero_nodes;
     }
     if (stats != NULL) {
         stats->work_join_products_total += total_products;
     }
 
-    // Collect nonzero nodes sorted largest-first
-    std::vector<int> nz_nodes;
-    nz_nodes.reserve(nonzero_nodes);
-    for (int i = 0; i < cutset_nodes; ++i) {
-        if ((h_td_off[i+1]-h_td_off[i]) > 0 && (h_bu_off[i+1]-h_bu_off[i]) > 0)
-            nz_nodes.push_back(i);
-    }
-    std::sort(nz_nodes.begin(), nz_nodes.end(), [&](int a, int b) {
-        long long pa = (long long)(h_td_off[a+1]-h_td_off[a]) * (h_bu_off[a+1]-h_bu_off[a]);
-        long long pb = (long long)(h_td_off[b+1]-h_td_off[b]) * (h_bu_off[b+1]-h_bu_off[b]);
-        return pa > pb;
-    });
+    // Collect nonzero nodes and sort on device by CPU-like cutset priority:
+    // td frontier size + bu frontier size (largest first).
+    thrust::device_vector<int> d_all_nodes(cutset_nodes);
+    thrust::copy(
+        thrust::counting_iterator<int>(0),
+        thrust::counting_iterator<int>(cutset_nodes),
+        d_all_nodes.begin());
+
+    thrust::device_vector<int> d_nz_nodes(cutset_nodes);
+    HasBothFrontiers has_both{
+        thrust::raw_pointer_cast(d_td_offsets.data()),
+        thrust::raw_pointer_cast(d_bu_offsets.data())
+    };
+    auto nz_end = thrust::copy_if(
+        d_all_nodes.begin(),
+        d_all_nodes.end(),
+        d_nz_nodes.begin(),
+        has_both);
+    d_nz_nodes.resize(static_cast<int>(nz_end - d_nz_nodes.begin()));
+
+    thrust::device_vector<long long> d_nz_scores(d_nz_nodes.size());
+    FrontierSumScore score_fn{
+        thrust::raw_pointer_cast(d_td_offsets.data()),
+        thrust::raw_pointer_cast(d_bu_offsets.data())
+    };
+    thrust::transform(d_nz_nodes.begin(), d_nz_nodes.end(), d_nz_scores.begin(), score_fn);
+    thrust::sort_by_key(d_nz_scores.begin(), d_nz_scores.end(), d_nz_nodes.begin(), thrust::greater<long long>());
+
+    thrust::host_vector<int> h_nz_nodes = d_nz_nodes;
+    std::vector<int> nz_nodes(h_nz_nodes.begin(), h_nz_nodes.end());
 
     // Running frontier stored on device
     thrust::device_vector<ObjType> d_frontier_pts;
