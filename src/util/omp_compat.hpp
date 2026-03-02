@@ -52,4 +52,6 @@ inline int cumodd_omp_thread_num() {
 #endif
 }
 
+#include "cpu_affinity.hpp"
+
 #endif

@@ -15,6 +15,7 @@
 #include "bdd/bdd_alg.hpp"
 #include "bdd/bdd_multiobj.hpp"
 #include "util/cli_parser.hpp"
+#include "util/omp_compat.hpp"
 #include "util/stats.hpp"
 #include "util/util.hpp"
 #include "util/output_utils.hpp"
@@ -67,6 +68,11 @@ int main(int argc, char *argv[])
     const string frontier_out_path = options.frontier_out_path;
     const bool save_stats = options.save_stats;
     const string stats_out_path = options.stats_out_path;
+
+    if (backend == BACKEND_CPU)
+    {
+        cumodd_bind_openmp_threads_to_cores_if_applicable(cpu_threads);
+    }
 
     typedef std::chrono::steady_clock WallClock;
     const WallClock::time_point run_wall_begin = WallClock::now();

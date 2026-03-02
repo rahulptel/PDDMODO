@@ -56,6 +56,8 @@ CPU options:
   - OpenMP-enabled build: `OMP_NUM_THREADS` is used when valid; otherwise defaults to `1`.
   - OpenMP-disabled build: always runs serially with `1` thread.
 - in OpenMP-disabled builds, explicit CPU thread arguments (`--cpu-threads <N>` or `cpu <N>`) fail with a hard error and instruct to rebuild with `ENABLE_OPENMP=1`.
+- in OpenMP-enabled CPU runs, a fixed internal thread-to-core mapping is applied (`thread i -> core i`, up to 256 threads).
+- this mapping is ignored when backend is `gpu` or when built without OpenMP.
 
 GPU options:
 - `--kernel <K>`: select kernel version (`1`, `2`, or `3`).
