@@ -18,7 +18,7 @@
 //
 struct BDDMultiObj {
     // Find pareto frontier from top-down approach
-	static ParetoFrontier* pareto_frontier_topdown(BDD* bdd, bool maximization=true, const int problem_type=-1, const int state_dominance=0, EnumerationStats* stats = NULL, int cpu_threads = 1);
+	static ParetoFrontier* pareto_frontier_topdown(BDD* bdd, bool maximization=true, const int problem_type=-1, const int state_dominance=0, EnumerationStats* stats = NULL, int cpu_threads = 1, int cpu_topdown_kernel = 1);
 
     // Find pareto frontier from top-down approach / CUDA
     // kernel_version:
@@ -40,7 +40,7 @@ struct BDDMultiObj {
 	static ParetoFrontier* pareto_frontier_bottomup(BDD* bdd, bool maximization=true, const int problem_type=-1, const int state_dominance=0, EnumerationStats* stats = NULL, int cpu_threads = 1);
 
     // Find pareto frontier using dynamic layer cutset
-    static ParetoFrontier* pareto_frontier_dynamic_layer_cutset(BDD* bdd, bool maximization=true, const int problem_type=-1, const int state_dominance=0, EnumerationStats* stats = NULL, int cpu_threads = 1);
+    static ParetoFrontier* pareto_frontier_dynamic_layer_cutset(BDD* bdd, bool maximization=true, const int problem_type=-1, const int state_dominance=0, EnumerationStats* stats = NULL, int cpu_threads = 1, int cpu_coupled_kernel = 1);
 
     // Filter layer based on dominance
     static void filter_dominance(BDD* bdd, const int layer, const int problem_type, const int state_dominance, EnumerationStats* stats);

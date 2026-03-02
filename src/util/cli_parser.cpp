@@ -19,6 +19,8 @@ CliOptions::CliOptions()
       backend(BACKEND_CPU),
       cpu_threads(1),
       kernel_version(-1),
+      cpu_topdown_kernel(CPU_TOPDOWN_KERNEL_1),
+      cpu_coupled_kernel(CPU_COUPLED_KERNEL_1),
       save_frontier(false),
       save_stats(false)
 {
@@ -126,6 +128,8 @@ void print_usage()
     cout << "\t\tNamed backend options:\n";
     cout << "\t\t\t--backend cpu|gpu\n";
     cout << "\t\t\t--cpu-threads <N>   (cpu only)\n";
+    cout << "\t\t\t--cpu-topdown-kernel <K> (cpu only, method=1, K in {1,3})\n";
+    cout << "\t\t\t--cpu-coupled-kernel <K> (cpu only, method=3, K in {1,3})\n";
     cout << "\t\t\t--kernel <K>        (gpu only, K in {1,2,3})\n";
     cout << "\t\tShorthand backend options:\n";
     cout << "\t\t\tcpu [N]\n";
@@ -197,6 +201,8 @@ bool parse_cli_args(int argc, char *argv[], CliOptions *out, string *error)
     bool backend_from_shorthand = false;
     bool kernel_version_set = false;
     bool cpu_threads_set = false;
+    bool cpu_topdown_kernel_set = false;
+    bool cpu_coupled_kernel_set = false;
 
     for (int i = 5; i < argc; ++i)
     {
@@ -312,6 +318,70 @@ bool parse_cli_args(int argc, char *argv[], CliOptions *out, string *error)
                 return false;
             }
             kernel_version_set = true;
+        }
+        else if (token == "--cpu-topdown-kernel")
+        {
+            if (cpu_topdown_kernel_set)
+            {
+                if (error != NULL)
+                {
+                    *error = "Error - --cpu-topdown-kernel provided multiple times.";
+                }
+                return false;
+            }
+            if (i + 1 >= argc)
+            {
+                if (error != NULL)
+                {
+                    *error = "Error - --cpu-topdown-kernel requires a value in {1,3}.";
+                }
+                return false;
+            }
+            string value(argv[++i]);
+            int parsed_kernel = 0;
+            if (!parse_positive_int(value, &parsed_kernel) ||
+                (parsed_kernel != CPU_TOPDOWN_KERNEL_1 && parsed_kernel != CPU_TOPDOWN_KERNEL_3))
+            {
+                if (error != NULL)
+                {
+                    *error = "Error - invalid --cpu-topdown-kernel value '" + value + "' (expected 1 or 3).";
+                }
+                return false;
+            }
+            opts.cpu_topdown_kernel = parsed_kernel;
+            cpu_topdown_kernel_set = true;
+        }
+        else if (token == "--cpu-coupled-kernel")
+        {
+            if (cpu_coupled_kernel_set)
+            {
+                if (error != NULL)
+                {
+                    *error = "Error - --cpu-coupled-kernel provided multiple times.";
+                }
+                return false;
+            }
+            if (i + 1 >= argc)
+            {
+                if (error != NULL)
+                {
+                    *error = "Error - --cpu-coupled-kernel requires a value in {1,3}.";
+                }
+                return false;
+            }
+            string value(argv[++i]);
+            int parsed_kernel = 0;
+            if (!parse_positive_int(value, &parsed_kernel) ||
+                (parsed_kernel != CPU_COUPLED_KERNEL_1 && parsed_kernel != CPU_COUPLED_KERNEL_3))
+            {
+                if (error != NULL)
+                {
+                    *error = "Error - invalid --cpu-coupled-kernel value '" + value + "' (expected 1 or 3).";
+                }
+                return false;
+            }
+            opts.cpu_coupled_kernel = parsed_kernel;
+            cpu_coupled_kernel_set = true;
         }
         else if (token == "cpu" || token == "gpu")
         {
@@ -492,6 +562,54 @@ bool parse_cli_args(int argc, char *argv[], CliOptions *out, string *error)
         if (error != NULL)
         {
             *error = "Error - --kernel is only valid with backend=gpu.";
+        }
+        return false;
+    }
+    if (opts.backend == BACKEND_GPU && cpu_topdown_kernel_set)
+    {
+        if (error != NULL)
+        {
+            *error = "Error - --cpu-topdown-kernel is only valid with backend=cpu.";
+        }
+        return false;
+    }
+    if (cpu_topdown_kernel_set && opts.method != 1)
+    {
+        if (error != NULL)
+        {
+            *error = "Error - --cpu-topdown-kernel is only supported for method 1 (top-down BFS).";
+        }
+        return false;
+    }
+    if (cpu_topdown_kernel_set && opts.problem_type == 3)
+    {
+        if (error != NULL)
+        {
+            *error = "Error - --cpu-topdown-kernel is currently unsupported for problem_type=3 (TSP).";
+        }
+        return false;
+    }
+    if (opts.backend == BACKEND_GPU && cpu_coupled_kernel_set)
+    {
+        if (error != NULL)
+        {
+            *error = "Error - --cpu-coupled-kernel is only valid with backend=cpu.";
+        }
+        return false;
+    }
+    if (cpu_coupled_kernel_set && opts.method != 3)
+    {
+        if (error != NULL)
+        {
+            *error = "Error - --cpu-coupled-kernel is only supported for method 3 (dynamic layer cutset).";
+        }
+        return false;
+    }
+    if (cpu_coupled_kernel_set && opts.problem_type == 3)
+    {
+        if (error != NULL)
+        {
+            *error = "Error - --cpu-coupled-kernel is currently unsupported for problem_type=3 (TSP).";
         }
         return false;
     }

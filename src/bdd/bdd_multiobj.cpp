@@ -5,6 +5,7 @@
 #include "bdd_multiobj.hpp"
 #include "bdd_alg.hpp"
 #include <chrono>
+#include <new>
 
 #include "../cuda/cuda_wrappers.hpp"
 #include "../util/omp_compat.hpp"
@@ -176,6 +177,334 @@ inline long long count_mdd_survivors_bottomup_layer(MDD* mdd, const int layer) {
     return total;
 }
 
+inline void expand_layer_topdown_cpu_kernel1(BDD* bdd,
+                                             const int layer,
+                                             const bool maximization,
+                                             ParetoFrontierManager* mgmr,
+                                             const bool parallel_mode,
+                                             const int threads) {
+    const int first_arc_type = maximization ? 1 : 0;
+    const int second_arc_type = maximization ? 0 : 1;
+    const int layer_size = bdd->layers[layer].size();
+    CUMODD_OMP_PARALLEL_FOR_DYNAMIC_IF(parallel_mode, threads)
+    for (int i = 0; i < layer_size; ++i) {
+        Node* node = bdd->layers[layer][i];
+        node->pareto_frontier = request_frontier(mgmr, parallel_mode);
+        for (vector<Node*>::iterator prev = node->prev[first_arc_type].begin();
+             prev != node->prev[first_arc_type].end(); ++prev) {
+            node->pareto_frontier->merge(*((*prev)->pareto_frontier), (*prev)->weights[first_arc_type]);
+        }
+        for (vector<Node*>::iterator prev = node->prev[second_arc_type].begin();
+             prev != node->prev[second_arc_type].end(); ++prev) {
+            node->pareto_frontier->merge(*((*prev)->pareto_frontier), (*prev)->weights[second_arc_type]);
+        }
+    }
+}
+
+struct CpuTopdownTileTask {
+    int node_idx;
+    size_t local_begin;
+    size_t local_end;
+};
+
+inline bool expand_layer_topdown_cpu_kernel3(BDD* bdd,
+                                             const int layer,
+                                             const bool maximization,
+                                             ParetoFrontierManager* mgmr,
+                                             const bool parallel_mode,
+                                             const int threads) {
+    const int first_arc_type = maximization ? 1 : 0;
+    const int second_arc_type = maximization ? 0 : 1;
+    const int layer_size = bdd->layers[layer].size();
+    if (layer_size <= 0) {
+        return true;
+    }
+
+    vector<size_t> node_offsets(layer_size + 1, 0);
+    for (int i = 0; i < layer_size; ++i) {
+        Node* node = bdd->layers[layer][i];
+        size_t node_candidates = 0;
+        for (vector<Node*>::iterator prev = node->prev[first_arc_type].begin();
+             prev != node->prev[first_arc_type].end(); ++prev) {
+            if ((*prev) != NULL && (*prev)->pareto_frontier != NULL) {
+                node_candidates += static_cast<size_t>((*prev)->pareto_frontier->get_num_sols());
+            }
+        }
+        for (vector<Node*>::iterator prev = node->prev[second_arc_type].begin();
+             prev != node->prev[second_arc_type].end(); ++prev) {
+            if ((*prev) != NULL && (*prev)->pareto_frontier != NULL) {
+                node_candidates += static_cast<size_t>((*prev)->pareto_frontier->get_num_sols());
+            }
+        }
+        node_offsets[i + 1] = node_offsets[i] + node_candidates;
+    }
+
+    const size_t total_candidates = node_offsets[layer_size];
+    vector<ObjType> cand_points(total_candidates * NOBJS, 0);
+
+    CUMODD_OMP_PARALLEL_FOR_DYNAMIC_IF(parallel_mode, threads)
+    for (int i = 0; i < layer_size; ++i) {
+        Node* node = bdd->layers[layer][i];
+        size_t write_idx = node_offsets[i];
+
+        for (vector<Node*>::iterator prev = node->prev[first_arc_type].begin();
+             prev != node->prev[first_arc_type].end(); ++prev) {
+            if ((*prev) == NULL || (*prev)->pareto_frontier == NULL) {
+                continue;
+            }
+            const vector<ObjType>& prev_sols = (*prev)->pareto_frontier->sols;
+            const size_t num_prev_sols = prev_sols.size() / NOBJS;
+            const ObjType* shift = (*prev)->weights[first_arc_type];
+            for (size_t s = 0; s < num_prev_sols; ++s) {
+                const size_t out_pos = (write_idx + s) * NOBJS;
+                const size_t in_pos = s * NOBJS;
+                for (int o = 0; o < NOBJS; ++o) {
+                    cand_points[out_pos + o] = prev_sols[in_pos + o] + shift[o];
+                }
+            }
+            write_idx += num_prev_sols;
+        }
+
+        for (vector<Node*>::iterator prev = node->prev[second_arc_type].begin();
+             prev != node->prev[second_arc_type].end(); ++prev) {
+            if ((*prev) == NULL || (*prev)->pareto_frontier == NULL) {
+                continue;
+            }
+            const vector<ObjType>& prev_sols = (*prev)->pareto_frontier->sols;
+            const size_t num_prev_sols = prev_sols.size() / NOBJS;
+            const ObjType* shift = (*prev)->weights[second_arc_type];
+            for (size_t s = 0; s < num_prev_sols; ++s) {
+                const size_t out_pos = (write_idx + s) * NOBJS;
+                const size_t in_pos = s * NOBJS;
+                for (int o = 0; o < NOBJS; ++o) {
+                    cand_points[out_pos + o] = prev_sols[in_pos + o] + shift[o];
+                }
+            }
+            write_idx += num_prev_sols;
+        }
+        assert(write_idx == node_offsets[i + 1]);
+    }
+
+    const size_t kCpuTilePoints = 256;
+    vector<CpuTopdownTileTask> tasks;
+    tasks.reserve((total_candidates + kCpuTilePoints - 1) / kCpuTilePoints + static_cast<size_t>(layer_size));
+    for (int i = 0; i < layer_size; ++i) {
+        const size_t node_begin = node_offsets[i];
+        const size_t node_end = node_offsets[i + 1];
+        const size_t node_len = node_end - node_begin;
+        for (size_t local_begin = 0; local_begin < node_len; local_begin += kCpuTilePoints) {
+            CpuTopdownTileTask task;
+            task.node_idx = i;
+            task.local_begin = local_begin;
+            task.local_end = std::min(node_len, local_begin + kCpuTilePoints);
+            tasks.push_back(task);
+        }
+    }
+
+    vector<unsigned char> alive(total_candidates, 1);
+    const long long task_count = static_cast<long long>(tasks.size());
+    CUMODD_OMP_PARALLEL_FOR_DYNAMIC_IF(parallel_mode, threads)
+    for (long long t = 0; t < task_count; ++t) {
+        const CpuTopdownTileTask& task = tasks[static_cast<size_t>(t)];
+        const size_t node_begin = node_offsets[task.node_idx];
+        const size_t node_end = node_offsets[task.node_idx + 1];
+        const size_t tile_begin = node_begin + task.local_begin;
+        const size_t tile_end = node_begin + task.local_end;
+
+        for (size_t idx_i = tile_begin; idx_i < tile_end; ++idx_i) {
+            bool dominated = false;
+            const size_t pos_i = idx_i * NOBJS;
+            for (size_t idx_j = node_begin; idx_j < node_end && !dominated; ++idx_j) {
+                if (idx_i == idx_j) {
+                    continue;
+                }
+                const size_t pos_j = idx_j * NOBJS;
+                bool ge_all = true;
+                bool strict = false;
+                for (int o = 0; o < NOBJS; ++o) {
+                    const ObjType a = cand_points[pos_j + o];
+                    const ObjType b = cand_points[pos_i + o];
+                    ge_all = ge_all && (a >= b);
+                    strict = strict || (a > b);
+                }
+                if (ge_all && (strict || (idx_j < idx_i))) {
+                    dominated = true;
+                }
+            }
+            alive[idx_i] = dominated ? 0 : 1;
+        }
+    }
+
+    CUMODD_OMP_PARALLEL_FOR_DYNAMIC_IF(parallel_mode, threads)
+    for (int i = 0; i < layer_size; ++i) {
+        Node* node = bdd->layers[layer][i];
+        ParetoFrontier* frontier = request_frontier(mgmr, parallel_mode);
+        const size_t node_begin = node_offsets[i];
+        const size_t node_end = node_offsets[i + 1];
+        for (size_t idx = node_begin; idx < node_end; ++idx) {
+            if (alive[idx] == 0) {
+                continue;
+            }
+            const size_t pos = idx * NOBJS;
+            for (int o = 0; o < NOBJS; ++o) {
+                frontier->sols.push_back(cand_points[pos + o]);
+            }
+        }
+        node->pareto_frontier = frontier;
+    }
+
+    return true;
+}
+
+inline bool expand_layer_topdown_cpu_kernel3_coupled(BDD* bdd,
+                                                     const int layer,
+                                                     const bool maximization,
+                                                     ParetoFrontierManager* mgmr,
+                                                     const bool parallel_mode,
+                                                     const int threads) {
+    if (!expand_layer_topdown_cpu_kernel3(bdd, layer, maximization, mgmr, parallel_mode, threads)) {
+        return false;
+    }
+
+    BDDMultiObj::filter_completion(bdd, layer);
+
+    for (int i = 0; i < bdd->layers[layer - 1].size(); ++i) {
+        recycle_frontier(mgmr, bdd->layers[layer - 1][i]->pareto_frontier, parallel_mode);
+    }
+    return true;
+}
+
+inline bool expand_layer_bottomup_cpu_kernel3_coupled(BDD* bdd,
+                                                      const int layer,
+                                                      const bool maximization,
+                                                      ParetoFrontierManager* mgmr,
+                                                      const bool parallel_mode,
+                                                      const int threads) {
+    const int first_arc_type = maximization ? 1 : 0;
+    const int second_arc_type = maximization ? 0 : 1;
+    const int layer_size = bdd->layers[layer].size();
+    if (layer_size <= 0) {
+        return true;
+    }
+
+    vector<size_t> node_offsets(layer_size + 1, 0);
+    for (int i = 0; i < layer_size; ++i) {
+        Node* node = bdd->layers[layer][i];
+        size_t node_candidates = 0;
+        if (node->arcs[first_arc_type] != NULL && node->arcs[first_arc_type]->pareto_frontier_bu != NULL) {
+            node_candidates += static_cast<size_t>(node->arcs[first_arc_type]->pareto_frontier_bu->get_num_sols());
+        }
+        if (node->arcs[second_arc_type] != NULL && node->arcs[second_arc_type]->pareto_frontier_bu != NULL) {
+            node_candidates += static_cast<size_t>(node->arcs[second_arc_type]->pareto_frontier_bu->get_num_sols());
+        }
+        node_offsets[i + 1] = node_offsets[i] + node_candidates;
+    }
+
+    const size_t total_candidates = node_offsets[layer_size];
+    vector<ObjType> cand_points(total_candidates * NOBJS, 0);
+
+    CUMODD_OMP_PARALLEL_FOR_DYNAMIC_IF(parallel_mode, threads)
+    for (int i = 0; i < layer_size; ++i) {
+        Node* node = bdd->layers[layer][i];
+        size_t write_idx = node_offsets[i];
+
+        const int arc_types[2] = {first_arc_type, second_arc_type};
+        for (int a = 0; a < 2; ++a) {
+            const int arc_type = arc_types[a];
+            if (node->arcs[arc_type] == NULL || node->arcs[arc_type]->pareto_frontier_bu == NULL) {
+                continue;
+            }
+
+            const vector<ObjType>& next_sols = node->arcs[arc_type]->pareto_frontier_bu->sols;
+            const size_t num_next_sols = next_sols.size() / NOBJS;
+            const ObjType* shift = node->weights[arc_type];
+            for (size_t s = 0; s < num_next_sols; ++s) {
+                const size_t out_pos = (write_idx + s) * NOBJS;
+                const size_t in_pos = s * NOBJS;
+                for (int o = 0; o < NOBJS; ++o) {
+                    cand_points[out_pos + o] = next_sols[in_pos + o] + shift[o];
+                }
+            }
+            write_idx += num_next_sols;
+        }
+        assert(write_idx == node_offsets[i + 1]);
+    }
+
+    const size_t kCpuTilePoints = 256;
+    vector<CpuTopdownTileTask> tasks;
+    tasks.reserve((total_candidates + kCpuTilePoints - 1) / kCpuTilePoints + static_cast<size_t>(layer_size));
+    for (int i = 0; i < layer_size; ++i) {
+        const size_t node_begin = node_offsets[i];
+        const size_t node_end = node_offsets[i + 1];
+        const size_t node_len = node_end - node_begin;
+        for (size_t local_begin = 0; local_begin < node_len; local_begin += kCpuTilePoints) {
+            CpuTopdownTileTask task;
+            task.node_idx = i;
+            task.local_begin = local_begin;
+            task.local_end = std::min(node_len, local_begin + kCpuTilePoints);
+            tasks.push_back(task);
+        }
+    }
+
+    vector<unsigned char> alive(total_candidates, 1);
+    const long long task_count = static_cast<long long>(tasks.size());
+    CUMODD_OMP_PARALLEL_FOR_DYNAMIC_IF(parallel_mode, threads)
+    for (long long t = 0; t < task_count; ++t) {
+        const CpuTopdownTileTask& task = tasks[static_cast<size_t>(t)];
+        const size_t node_begin = node_offsets[task.node_idx];
+        const size_t node_end = node_offsets[task.node_idx + 1];
+        const size_t tile_begin = node_begin + task.local_begin;
+        const size_t tile_end = node_begin + task.local_end;
+
+        for (size_t idx_i = tile_begin; idx_i < tile_end; ++idx_i) {
+            bool dominated = false;
+            const size_t pos_i = idx_i * NOBJS;
+            for (size_t idx_j = node_begin; idx_j < node_end && !dominated; ++idx_j) {
+                if (idx_i == idx_j) {
+                    continue;
+                }
+                const size_t pos_j = idx_j * NOBJS;
+                bool ge_all = true;
+                bool strict = false;
+                for (int o = 0; o < NOBJS; ++o) {
+                    const ObjType a = cand_points[pos_j + o];
+                    const ObjType b = cand_points[pos_i + o];
+                    ge_all = ge_all && (a >= b);
+                    strict = strict || (a > b);
+                }
+                if (ge_all && (strict || (idx_j < idx_i))) {
+                    dominated = true;
+                }
+            }
+            alive[idx_i] = dominated ? 0 : 1;
+        }
+    }
+
+    CUMODD_OMP_PARALLEL_FOR_DYNAMIC_IF(parallel_mode, threads)
+    for (int i = 0; i < layer_size; ++i) {
+        Node* node = bdd->layers[layer][i];
+        ParetoFrontier* frontier = request_frontier(mgmr, parallel_mode);
+        const size_t node_begin = node_offsets[i];
+        const size_t node_end = node_offsets[i + 1];
+        for (size_t idx = node_begin; idx < node_end; ++idx) {
+            if (alive[idx] == 0) {
+                continue;
+            }
+            const size_t pos = idx * NOBJS;
+            for (int o = 0; o < NOBJS; ++o) {
+                frontier->sols.push_back(cand_points[pos + o]);
+            }
+        }
+        node->pareto_frontier_bu = frontier;
+    }
+
+    for (int i = 0; i < bdd->layers[layer + 1].size(); ++i) {
+        recycle_frontier(mgmr, bdd->layers[layer + 1][i]->pareto_frontier_bu, parallel_mode);
+    }
+
+    return true;
+}
+
 //
 // Find pareto frontier using top-down approach on CUDA
 // kernel_version: 1=one-block-per-node, 2=fixed-2D-grid, 3=dynamic-1D-grid
@@ -211,7 +540,7 @@ ParetoFrontier* BDDMultiObj::pareto_frontier_topdown_cuda(MDD* mdd, EnumerationS
 //
 // Find pareto frontier using top-down approach
 //
-ParetoFrontier* BDDMultiObj::pareto_frontier_topdown(BDD* bdd, bool maximization, const int problem_type, int state_dominance, EnumerationStats* stats, int cpu_threads) {
+ParetoFrontier* BDDMultiObj::pareto_frontier_topdown(BDD* bdd, bool maximization, const int problem_type, int state_dominance, EnumerationStats* stats, int cpu_threads, int cpu_topdown_kernel) {
     //cout << "\nComputing Pareto Frontier..." << endl;
 
 	// Initialize stats
@@ -232,100 +561,56 @@ ParetoFrontier* BDDMultiObj::pareto_frontier_topdown(BDD* bdd, bool maximization
 	bdd->get_root()->pareto_frontier = request_frontier(mgmr, parallel_mode);
 	bdd->get_root()->pareto_frontier->add(zero_array);
 
-    
-	if (maximization) {
-		for (int l = 1; l < bdd->num_layers; ++l) {
-//			cout << "\tLayer " << l << " - size = " << bdd->layers[l].size() << '\n';
-            const long long layer_candidates = count_bdd_candidates_topdown_layer(bdd, l, maximization);
-		
-            const int layer_size = bdd->layers[l].size();
-            CUMODD_OMP_PARALLEL_FOR_DYNAMIC_IF(parallel_mode, threads)
-            for (int i = 0; i < layer_size; ++i) {
-                Node* node = bdd->layers[l][i];
-                node->pareto_frontier = request_frontier(mgmr, parallel_mode);
-                for (vector<Node*>::iterator prev = node->prev[1].begin();
-                        prev != node->prev[1].end(); ++prev) {
-                    node->pareto_frontier->merge(*((*prev)->pareto_frontier), (*prev)->weights[1]);
-                }
-                for (vector<Node*>::iterator prev = node->prev[0].begin();
-                        prev != node->prev[0].end(); ++prev) {
-                    node->pareto_frontier->merge(*((*prev)->pareto_frontier), (*prev)->weights[0]);
-                }
+    const bool use_kernel3 = (cpu_topdown_kernel == 3);
+    bool warned_kernel3_fallback = false;
+    for (int l = 1; l < bdd->num_layers; ++l) {
+        const long long layer_candidates = count_bdd_candidates_topdown_layer(bdd, l, maximization);
+        const int layer_size = bdd->layers[l].size();
+
+        bool expanded = true;
+        if (use_kernel3) {
+            try {
+                expanded = expand_layer_topdown_cpu_kernel3(bdd, l, maximization, mgmr, parallel_mode, threads);
+            } catch (const std::bad_alloc&) {
+                expanded = false;
             }
-
-				if (state_dominance > 0) {
-                    const WallClock::time_point dominance_begin = perf_enabled ? WallClock::now() : WallClock::time_point();
-                    init = clock();
-					BDDMultiObj::filter_dominance(bdd, l, problem_type, state_dominance, stats);
-                    stats->cpu_state_dominance_s += static_cast<double>(clock() - init) / CLOCKS_PER_SEC;
-                    if (perf_enabled) {
-                        stats->wall_state_dominance_s += wall_elapsed_s(dominance_begin);
-                    }
-				}
-
-                const long long layer_survivors = count_bdd_survivors_topdown_layer(bdd, l);
-                if (stats != NULL) {
-                    stats->work_candidates_total += layer_candidates;
-                    stats->work_frontier_survivors_total += layer_survivors;
-                    update_peak_points(stats, layer_survivors);
+            if (!expanded) {
+                if (!warned_kernel3_fallback) {
+                    std::cerr << "Warning - CPU top-down kernel 3 fell back to kernel 1 due to memory pressure." << std::endl;
+                    warned_kernel3_fallback = true;
                 }
-				
-			// Deallocate frontier from previous layer
-				for (vector<Node*>::iterator it = bdd->layers[l-1].begin(); it != bdd->layers[l-1].end(); ++it) {
-					recycle_frontier(mgmr, (*it)->pareto_frontier, parallel_mode);
-				}
-                if (perf_enabled) {
-                    stats->cpu_layers_td += 1;
-                    stats->cpu_nodes_expanded += layer_size;
-                }
-			}
-		} else {
-			for (int l = 1; l < bdd->num_layers; ++l) {
-				//cout << "\tLayer " << l << " - size = " << bdd->layers[l].size() << '\n';
-                const long long layer_candidates = count_bdd_candidates_topdown_layer(bdd, l, maximization);
-		
-            const int layer_size = bdd->layers[l].size();
-            CUMODD_OMP_PARALLEL_FOR_DYNAMIC_IF(parallel_mode, threads)
-            for (int i = 0; i < layer_size; ++i) {
-                Node* node = bdd->layers[l][i];
-                node->pareto_frontier = request_frontier(mgmr, parallel_mode);
-                for (vector<Node*>::iterator prev = node->prev[0].begin();
-                        prev != node->prev[0].end(); ++prev) {
-                    node->pareto_frontier->merge(*((*prev)->pareto_frontier), (*prev)->weights[0]);
-                }
-                for (vector<Node*>::iterator prev = node->prev[1].begin();
-                        prev != node->prev[1].end(); ++prev) {
-                    node->pareto_frontier->merge(*((*prev)->pareto_frontier), (*prev)->weights[1]);
-                }
+                expand_layer_topdown_cpu_kernel1(bdd, l, maximization, mgmr, parallel_mode, threads);
             }
+        } else {
+            expand_layer_topdown_cpu_kernel1(bdd, l, maximization, mgmr, parallel_mode, threads);
+        }
 
-				if (state_dominance > 0) {				
-                    const WallClock::time_point dominance_begin = perf_enabled ? WallClock::now() : WallClock::time_point();
-                    init = clock();				
-					BDDMultiObj::filter_dominance(bdd, l, problem_type, state_dominance, stats);
-					stats->cpu_state_dominance_s += static_cast<double>(clock() - init) / CLOCKS_PER_SEC;
-                    if (perf_enabled) {
-                        stats->wall_state_dominance_s += wall_elapsed_s(dominance_begin);
-                    }
-				}
+        if (state_dominance > 0) {
+            const WallClock::time_point dominance_begin = perf_enabled ? WallClock::now() : WallClock::time_point();
+            init = clock();
+            BDDMultiObj::filter_dominance(bdd, l, problem_type, state_dominance, stats);
+            stats->cpu_state_dominance_s += static_cast<double>(clock() - init) / CLOCKS_PER_SEC;
+            if (perf_enabled) {
+                stats->wall_state_dominance_s += wall_elapsed_s(dominance_begin);
+            }
+        }
 
-                const long long layer_survivors = count_bdd_survivors_topdown_layer(bdd, l);
-                if (stats != NULL) {
-                    stats->work_candidates_total += layer_candidates;
-                    stats->work_frontier_survivors_total += layer_survivors;
-                    update_peak_points(stats, layer_survivors);
-                }
+        const long long layer_survivors = count_bdd_survivors_topdown_layer(bdd, l);
+        if (stats != NULL) {
+            stats->work_candidates_total += layer_candidates;
+            stats->work_frontier_survivors_total += layer_survivors;
+            update_peak_points(stats, layer_survivors);
+        }
 
-			// Deallocate frontier from previous layer
-				for (vector<Node*>::iterator it = bdd->layers[l-1].begin(); it != bdd->layers[l-1].end(); ++it) {
-					recycle_frontier(mgmr, (*it)->pareto_frontier, parallel_mode);
-				}
-                if (perf_enabled) {
-                    stats->cpu_layers_td += 1;
-                    stats->cpu_nodes_expanded += layer_size;
-                }
-			}		
-		}
+        // Deallocate frontier from previous layer
+        for (vector<Node*>::iterator it = bdd->layers[l-1].begin(); it != bdd->layers[l-1].end(); ++it) {
+            recycle_frontier(mgmr, (*it)->pareto_frontier, parallel_mode);
+        }
+        if (perf_enabled) {
+            stats->cpu_layers_td += 1;
+            stats->cpu_nodes_expanded += layer_size;
+        }
+    }
 	    
     ParetoFrontier* frontier = bdd->get_terminal()->pareto_frontier;
 	    
@@ -671,7 +956,7 @@ struct CompareMDDNode {
 //
 // Find pareto frontier using dynamic layer cutset
 //
-ParetoFrontier* BDDMultiObj::pareto_frontier_dynamic_layer_cutset(BDD* bdd, bool maximization, const int problem_type, const int state_dominance, EnumerationStats* stats, int cpu_threads) {
+ParetoFrontier* BDDMultiObj::pareto_frontier_dynamic_layer_cutset(BDD* bdd, bool maximization, const int problem_type, const int state_dominance, EnumerationStats* stats, int cpu_threads, int cpu_coupled_kernel) {
 	// Create pareto frontier manager
 	ParetoFrontierManager* mgmr = new ParetoFrontierManager(bdd->get_width());
     const int threads = cumodd_normalized_cpu_threads(cpu_threads);
@@ -701,6 +986,8 @@ ParetoFrontier* BDDMultiObj::pareto_frontier_dynamic_layer_cutset(BDD* bdd, bool
 	// Value of layer
 	int val_topdown = 0;
 	int val_bottomup = 0;
+    const bool use_coupled_kernel3 = (cpu_coupled_kernel == 3);
+    bool warned_coupled_kernel3_fallback = false;
 
 	while (layer_topdown != layer_bottomup) {
 //		if (layer_topdown <= 3) {
@@ -708,7 +995,24 @@ ParetoFrontier* BDDMultiObj::pareto_frontier_dynamic_layer_cutset(BDD* bdd, bool
             const int next_layer = layer_topdown + 1;
             const long long layer_candidates = count_bdd_candidates_topdown_layer(bdd, next_layer, maximization);
             // Expand topdown
-			expand_layer_topdown(bdd, ++layer_topdown, maximization, mgmr, threads);
+            ++layer_topdown;
+            bool expanded = true;
+            if (use_coupled_kernel3) {
+                try {
+                    expanded = expand_layer_topdown_cpu_kernel3_coupled(bdd, layer_topdown, maximization, mgmr, parallel_mode, threads);
+                } catch (const std::bad_alloc&) {
+                    expanded = false;
+                }
+                if (!expanded) {
+                    if (!warned_coupled_kernel3_fallback) {
+                        std::cerr << "Warning - CPU coupled kernel 3 fell back to kernel 1 due to memory pressure." << std::endl;
+                        warned_coupled_kernel3_fallback = true;
+                    }
+                    expand_layer_topdown(bdd, layer_topdown, maximization, mgmr, threads);
+                }
+            } else {
+                expand_layer_topdown(bdd, layer_topdown, maximization, mgmr, threads);
+            }
             if (perf_enabled) {
                 stats->cpu_layers_td += 1;
                 stats->cpu_nodes_expanded += bdd->layers[layer_topdown].size();
@@ -740,7 +1044,24 @@ ParetoFrontier* BDDMultiObj::pareto_frontier_dynamic_layer_cutset(BDD* bdd, bool
             const int next_layer = layer_bottomup - 1;
             const long long layer_candidates = count_bdd_candidates_bottomup_layer(bdd, next_layer, maximization);
 			// Expand layer bottomup
-			expand_layer_bottomup(bdd, --layer_bottomup, maximization, mgmr, threads);
+            --layer_bottomup;
+            bool expanded = true;
+            if (use_coupled_kernel3) {
+                try {
+                    expanded = expand_layer_bottomup_cpu_kernel3_coupled(bdd, layer_bottomup, maximization, mgmr, parallel_mode, threads);
+                } catch (const std::bad_alloc&) {
+                    expanded = false;
+                }
+                if (!expanded) {
+                    if (!warned_coupled_kernel3_fallback) {
+                        std::cerr << "Warning - CPU coupled kernel 3 fell back to kernel 1 due to memory pressure." << std::endl;
+                        warned_coupled_kernel3_fallback = true;
+                    }
+                    expand_layer_bottomup(bdd, layer_bottomup, maximization, mgmr, threads);
+                }
+            } else {
+                expand_layer_bottomup(bdd, layer_bottomup, maximization, mgmr, threads);
+            }
             if (perf_enabled) {
                 stats->cpu_layers_bu += 1;
                 stats->cpu_nodes_expanded += bdd->layers[layer_bottomup].size();
