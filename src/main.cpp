@@ -62,8 +62,7 @@ int main(int argc, char *argv[])
     const Backend backend = options.backend;
     const int kernel_version = options.kernel_version;
     const int cpu_threads = options.cpu_threads;
-    const int cpu_topdown_kernel = options.cpu_topdown_kernel;
-    const int cpu_coupled_kernel = options.cpu_coupled_kernel;
+    const int cpu_kernel = options.cpu_kernel;
     const bool save_frontier = options.save_frontier;
     const string frontier_out_path = options.frontier_out_path;
     const bool save_stats = options.save_stats;
@@ -184,7 +183,7 @@ int main(int argc, char *argv[])
                     exit(1);
                 }
             } else {
-                pareto_frontier = BDDMultiObj::pareto_frontier_topdown(mdd, enumeration_stats, cpu_threads, cpu_topdown_kernel);
+                pareto_frontier = BDDMultiObj::pareto_frontier_topdown(mdd, enumeration_stats, cpu_threads, cpu_kernel);
             }
         } else if (method == 3) { // Coupled
             if (backend == BACKEND_GPU) {
@@ -197,7 +196,7 @@ int main(int argc, char *argv[])
                     exit(1);
                 }
             } else {
-                pareto_frontier = BDDMultiObj::pareto_frontier_dynamic_layer_cutset(mdd, enumeration_stats, cpu_threads, cpu_coupled_kernel);
+                pareto_frontier = BDDMultiObj::pareto_frontier_dynamic_layer_cutset(mdd, enumeration_stats, cpu_threads, cpu_kernel);
             }
         } else {
             cout << "Error - method " << method << " not valid for TSP" << endl;
@@ -290,7 +289,7 @@ int main(int argc, char *argv[])
         }
         else
         {
-            pareto_frontier = BDDMultiObj::pareto_frontier_topdown(bdd, maximization, problem_type, state_dominance, enumeration_stats, cpu_threads, cpu_topdown_kernel);
+            pareto_frontier = BDDMultiObj::pareto_frontier_topdown(bdd, maximization, problem_type, state_dominance, enumeration_stats, cpu_threads, cpu_kernel);
         }
     }
     else if (method == 2)
@@ -311,7 +310,7 @@ int main(int argc, char *argv[])
             cout << "Error - GPU backend is unsupported for method 3." << endl;
             exit(1);
         }
-        pareto_frontier = BDDMultiObj::pareto_frontier_dynamic_layer_cutset(bdd, maximization, problem_type, state_dominance, enumeration_stats, cpu_threads, cpu_coupled_kernel);
+        pareto_frontier = BDDMultiObj::pareto_frontier_dynamic_layer_cutset(bdd, maximization, problem_type, state_dominance, enumeration_stats, cpu_threads, cpu_kernel);
     }
     else
     {

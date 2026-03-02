@@ -13,16 +13,10 @@ enum Backend
     BACKEND_GPU = 1
 };
 
-enum CpuTopdownKernel
+enum CpuKernel
 {
-    CPU_TOPDOWN_KERNEL_1 = 1,
-    CPU_TOPDOWN_KERNEL_3 = 3
-};
-
-enum CpuCoupledKernel
-{
-    CPU_COUPLED_KERNEL_1 = 1,
-    CPU_COUPLED_KERNEL_3 = 3
+    CPU_KERNEL_1 = 1,
+    CPU_KERNEL_3 = 3
 };
 
 struct CliOptions
@@ -34,8 +28,7 @@ struct CliOptions
     Backend backend;
     int cpu_threads;
     int kernel_version;
-    int cpu_topdown_kernel;
-    int cpu_coupled_kernel;
+    int cpu_kernel;
     bool save_frontier;
     std::string frontier_out_path;
     bool save_stats;

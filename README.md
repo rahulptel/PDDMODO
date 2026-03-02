@@ -51,6 +51,7 @@ Backend selection (optional; defaults to CPU):
 
 CPU options:
 - `--cpu-threads <N>`: positive integer thread count for CPU enumeration (only when built with `ENABLE_OPENMP=1`).
+- `--cpu-kernel <K>`: CPU kernel variant (`1` or `3`) for CPU methods `1` (top-down) and `3` (dynamic layer cutset), including TSP.
 - if CPU backend is selected and no thread count is provided:
   - OpenMP-enabled build: `OMP_NUM_THREADS` is used when valid; otherwise defaults to `1`.
   - OpenMP-disabled build: always runs serially with `1` thread.
