@@ -89,10 +89,25 @@ Stats saving options:
 Stdout format (always 3 lines):
 - line 1: number of Pareto solutions.
 - line 2: CPU total time (`cpu_compile_s + cpu_enumeration_s`) for backward compatibility.
-- line 3: tab-separated stats with existing fields unchanged in order, followed by appended wall-time fields:
+- line 3 (problem types 1/2): tab-separated stats in this order:
+  - `method`
+  - `state_dominance`
+  - `original_width`
+  - `reduced_width`
+  - `original_num_nodes`
+  - `reduced_num_nodes`
+  - `cpu_compile_s`
+  - `cpu_enumeration_s`
+  - `layer_coupling`
+  - `dominance_filtered_total`
+  - `cpu_state_dominance_s`
   - `wall_compile_s`
   - `wall_enumeration_s` (excludes final lexicographic sort)
-  - `wall_total_end_to_end_s` (includes post-processing such as sort and optional frontier save; measured from run start to stdout reporting)
+- line 3 (problem type 3 / TSP): tab-separated stats in this order:
+  - `cpu_compile_s`
+  - `cpu_enumeration_s`
+  - `wall_compile_s`
+  - `wall_enumeration_s` (excludes final lexicographic sort)
 
 JSONL schema notes (`--save-stats`):
 - One nested JSON object is written per run (JSONL).
@@ -119,7 +134,6 @@ JSONL schema notes (`--save-stats`):
   - `work_join_products_total`
 - Key timing semantics:
   - `wall_enumeration_s` excludes final lexicographic sort.
-  - `wall_total_end_to_end_s` includes post-processing before stdout reporting.
   - `cpu_total_s = cpu_compile_s + cpu_enumeration_s` (same CPU semantics as stdout line 2).
 
 When backend is `gpu`, execution fails fast with a nonzero exit code if CUDA is unavailable or if the selected problem/method combination has no GPU implementation.
