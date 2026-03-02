@@ -236,6 +236,7 @@ int main(int argc, char *argv[])
         enumeration_stats->cpu_dominance_s = ((double)enumeration_stats->cpu_ticks_state_dominance) / CLOCKS_PER_SEC;
         enumeration_stats->wall_compile_s = compilation_tsp_wall_s;
         enumeration_stats->wall_enumeration_s = pareto_tsp_wall_enumeration_s;
+        enumeration_stats->cpu_mem_peak_bytes = get_cpu_peak_memory_bytes();
 
         print_and_save_run_summary(options, enumeration_stats, run_summary, pareto_frontier);
 
@@ -384,6 +385,7 @@ int main(int argc, char *argv[])
     enumeration_stats->cpu_dominance_s = ((double)enumeration_stats->cpu_ticks_state_dominance) / CLOCKS_PER_SEC;
     enumeration_stats->wall_compile_s = compilation_wall_s;
     enumeration_stats->wall_enumeration_s = pareto_wall_enumeration_s;
+    enumeration_stats->cpu_mem_peak_bytes = get_cpu_peak_memory_bytes();
 
     print_and_save_run_summary(options, enumeration_stats, run_summary, pareto_frontier);
 

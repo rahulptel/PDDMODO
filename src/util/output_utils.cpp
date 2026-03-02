@@ -183,6 +183,7 @@ bool write_stats_jsonl(const string &out_path,
     const double kernel_expand_td_s = stats != NULL ? stats->kernel_expand_td_s : 0.0;
     const double kernel_dominance_s = stats != NULL ? stats->kernel_dominance_s : 0.0;
     const double kernel_total_s = stats != NULL ? stats->kernel_total_s : 0.0;
+    const long long cpu_mem_peak_bytes = stats != NULL ? stats->cpu_mem_peak_bytes : 0;
     const long long gpu_mem_peak_used_bytes = stats != NULL ? stats->gpu_mem_peak_used_bytes : 0;
     const long long gpu_mem_peak_reserved_bytes = stats != NULL ? stats->gpu_mem_peak_reserved_bytes : 0;
     const int layer_coupling = stats != NULL ? stats->layer_coupling : 0;
@@ -229,6 +230,9 @@ bool write_stats_jsonl(const string &out_path,
     out << "},";
 
     out << "\"memory\":{";
+    out << "\"cpu\":{";
+    out << "\"cpu_mem_peak_bytes\":" << cpu_mem_peak_bytes;
+    out << "},";
     out << "\"gpu\":{";
     out << "\"gpu_mem_peak_used_bytes\":" << gpu_mem_peak_used_bytes << ",";
     out << "\"gpu_mem_peak_reserved_bytes\":" << gpu_mem_peak_reserved_bytes;

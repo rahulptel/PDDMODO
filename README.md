@@ -100,12 +100,17 @@ JSONL schema notes (`--save-stats`):
   - `identity`
   - `outputs`
   - `timing`
+  - `memory`
   - `work`
   - `dominance`
   - `structure`
   - `perf`
   - `status`
 - `timing` uses `cpu_*` and `wall_*` naming.
+- `memory` contains:
+  - `cpu.cpu_mem_peak_bytes` (process peak RSS in bytes)
+  - `gpu.gpu_mem_peak_used_bytes`
+  - `gpu.gpu_mem_peak_reserved_bytes`
 - `work` contains:
   - `work_candidates_total`
   - `work_frontier_survivors_total`
