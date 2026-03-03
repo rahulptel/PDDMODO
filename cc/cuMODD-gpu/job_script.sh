@@ -7,8 +7,9 @@
 # At the very least, it has to contain the runtime switch (either -t or --time):
 #SBATCH -t 0-03:00
 #SBATCH --mem=17G
+#SBATCH --nodes=1
 #SBATCH --cpus-per-task=2
-#SBATCH --gpus-per-node=nvidia_h100_80gb_hbm3_2g.10gb:1
+#SBATCH --gpus-per-node=nvidia_h100_80gb_hbm3_1g.10gb:1
 # If WHOLE_NODE=1 in config.h file, the following sbatch arguments will be automatically added:
 # --nodes=1 --cpus-per-task=$NWHOLE --exclusive , where $NWHOLE is also defined in config.h
 
