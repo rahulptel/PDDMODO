@@ -4,6 +4,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(CDPATH= cd -- "$SCRIPT_DIR/../.." && pwd)"
+FARM_NAME="$(basename "$SCRIPT_DIR")"
+BIN_DIR="$PROJECT_ROOT/resources/bin/$FARM_NAME"
 
 CLEAN_FIRST="${CLEAN_FIRST:-1}"
 MACHINE="${machine:-${MACHINE:-}}"
@@ -49,10 +51,11 @@ if [ "$MACHINE" = "cc" ] && [ -z "${BOOST_ROOT:-}" ]; then
 fi
 
 cd "$PROJECT_ROOT"
+mkdir -p "$BIN_DIR"
 
 if [ "$CLEAN_FIRST" = "1" ]; then
     make "${MACHINE_ARGS[@]}" clean
-    rm -f "$SCRIPT_DIR"/multiobj_nobjs*
+    rm -f "$BIN_DIR"/multiobj_nobjs*
 fi
 
 for i in $(seq "$NUM_OBJS_MIN" "$NUM_OBJS_MAX"); do
@@ -62,5 +65,5 @@ for i in $(seq "$NUM_OBJS_MIN" "$NUM_OBJS_MAX"); do
         echo "Error: expected binary not found after build: $BUILT_BIN"
         exit 1
     fi
-    mv -f "$BUILT_BIN" "$SCRIPT_DIR/"
+    mv -f "$BUILT_BIN" "$BIN_DIR/"
 done
