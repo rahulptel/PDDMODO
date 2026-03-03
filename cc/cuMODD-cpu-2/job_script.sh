@@ -4,6 +4,7 @@
 # At the very least, it has to contain the runtime switch (either -t or --time):
 #SBATCH -t 0-03:00
 #SBATCH --mem=17G
+#SBATCH --nodes=1
 #SBATCH --cpus-per-task=2
 export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
 
