@@ -6,3 +6,11 @@ multiobj_*
 reports
 obj
 resources
+outputs
+
+*MISC*
+*OUTPUT*
+*STATUSES*
+*TMP*
+*RUN*
+*slurm*.out
