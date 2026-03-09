@@ -189,6 +189,7 @@ bool write_stats_jsonl(const string &out_path,
     const int layer_coupling = stats != NULL ? stats->layer_coupling : 0;
     const int dominance_filtered_total = stats != NULL ? stats->dominance_filtered_total : 0;
     const long long work_candidates_total = stats != NULL ? stats->work_candidates_total : 0;
+    const long long work_candidates_peak = stats != NULL ? stats->work_candidates_peak : 0;
     const long long work_frontier_survivors_total = stats != NULL ? stats->work_frontier_survivors_total : 0;
     const long long work_frontier_peak_points = stats != NULL ? stats->work_frontier_peak_points : 0;
     const long long work_join_products_total = stats != NULL ? stats->work_join_products_total : 0;
@@ -241,6 +242,7 @@ bool write_stats_jsonl(const string &out_path,
 
     out << "\"work\":{";
     out << "\"work_candidates_total\":" << work_candidates_total << ",";
+    out << "\"work_candidates_peak\":" << work_candidates_peak << ",";
     out << "\"work_frontier_survivors_total\":" << work_frontier_survivors_total << ",";
     out << "\"work_frontier_peak_points\":" << work_frontier_peak_points << ",";
     out << "\"work_join_products_total\":" << work_join_products_total;

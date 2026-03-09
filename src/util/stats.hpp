@@ -54,6 +54,7 @@ struct EnumerationStats {
 
     // Method-agnostic work counters
     long long work_candidates_total;
+    long long work_candidates_peak;
     long long work_frontier_survivors_total;
     long long work_frontier_peak_points;
     long long work_join_products_total;
@@ -87,6 +88,7 @@ struct EnumerationStats {
           gpu_mem_peak_used_bytes(0),
           gpu_mem_peak_reserved_bytes(0),
           work_candidates_total(0),
+          work_candidates_peak(0),
           work_frontier_survivors_total(0),
           work_frontier_peak_points(0),
           work_join_products_total(0),

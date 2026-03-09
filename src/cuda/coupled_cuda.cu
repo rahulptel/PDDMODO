@@ -945,6 +945,7 @@ ParetoFrontier* coupled_cuda_enumerate(MDD* mdd,
             ++td_iters;
             if (stats != NULL) {
                 stats->work_candidates_total += layer_candidates;
+                stats->work_candidates_peak = std::max(stats->work_candidates_peak, layer_candidates);
                 stats->work_frontier_survivors_total += layer_survivors;
                 stats->work_frontier_peak_points = std::max(stats->work_frontier_peak_points, layer_survivors);
             }
@@ -982,6 +983,7 @@ ParetoFrontier* coupled_cuda_enumerate(MDD* mdd,
             ++bu_iters;
             if (stats != NULL) {
                 stats->work_candidates_total += layer_candidates;
+                stats->work_candidates_peak = std::max(stats->work_candidates_peak, layer_candidates);
                 stats->work_frontier_survivors_total += layer_survivors;
                 stats->work_frontier_peak_points = std::max(stats->work_frontier_peak_points, layer_survivors);
             }

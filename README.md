@@ -131,6 +131,7 @@ JSONL schema notes (`--save-stats`):
   - `gpu.gpu_mem_peak_reserved_bytes`
 - `work` contains:
   - `work_candidates_total`
+  - `work_candidates_peak`
   - `work_frontier_survivors_total`
   - `work_frontier_peak_points`
   - `work_join_products_total`

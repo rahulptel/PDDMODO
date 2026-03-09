@@ -58,6 +58,7 @@ inline void reset_cpu_metrics_stats(EnumerationStats* stats) {
     stats->gpu_mem_peak_used_bytes = 0;
     stats->gpu_mem_peak_reserved_bytes = 0;
     stats->work_candidates_total = 0;
+    stats->work_candidates_peak = 0;
     stats->work_frontier_survivors_total = 0;
     stats->work_frontier_peak_points = 0;
     stats->work_join_products_total = 0;
@@ -73,6 +74,15 @@ inline void update_peak_points(EnumerationStats* stats, const long long value) {
     }
     if (value > stats->work_frontier_peak_points) {
         stats->work_frontier_peak_points = value;
+    }
+}
+
+inline void update_peak_candidates(EnumerationStats* stats, const long long value) {
+    if (stats == NULL) {
+        return;
+    }
+    if (value > stats->work_peak_candidates) {
+        stats->work_peak_candidates = value;
     }
 }
 
@@ -595,6 +605,7 @@ ParetoFrontier* BDDMultiObj::pareto_frontier_topdown(BDD* bdd, bool maximization
         const long long layer_survivors = count_bdd_survivors_topdown_layer(bdd, l);
         if (stats != NULL) {
             stats->work_candidates_total += layer_candidates;
+            update_peak_candidates(stats, layer_candidates);
             stats->work_frontier_survivors_total += layer_survivors;
             update_peak_points(stats, layer_survivors);
         }
@@ -665,6 +676,7 @@ ParetoFrontier* BDDMultiObj::pareto_frontier_bottomup(BDD* bdd, bool maximizatio
                 const long long layer_survivors = count_bdd_survivors_bottomup_layer(bdd, l);
                 if (stats != NULL) {
                     stats->work_candidates_total += layer_candidates;
+                    update_peak_candidates(stats, layer_candidates);
                     stats->work_frontier_survivors_total += layer_survivors;
                     update_peak_points(stats, layer_survivors);
                 }
@@ -699,6 +711,7 @@ ParetoFrontier* BDDMultiObj::pareto_frontier_bottomup(BDD* bdd, bool maximizatio
                 const long long layer_survivors = count_bdd_survivors_bottomup_layer(bdd, l);
                 if (stats != NULL) {
                     stats->work_candidates_total += layer_candidates;
+                    update_peak_candidates(stats, layer_candidates);
                     stats->work_frontier_survivors_total += layer_survivors;
                     update_peak_points(stats, layer_survivors);
                 }
@@ -1306,6 +1319,7 @@ ParetoFrontier* BDDMultiObj::pareto_frontier_dynamic_layer_cutset(BDD* bdd, bool
             const long long layer_survivors = count_bdd_survivors_topdown_layer(bdd, layer_topdown);
             if (stats != NULL) {
                 stats->work_candidates_total += layer_candidates;
+                update_peak_candidates(stats, layer_candidates);
                 stats->work_frontier_survivors_total += layer_survivors;
                 update_peak_points(stats, layer_survivors);
             }
@@ -1345,6 +1359,7 @@ ParetoFrontier* BDDMultiObj::pareto_frontier_dynamic_layer_cutset(BDD* bdd, bool
             const long long layer_survivors = count_bdd_survivors_bottomup_layer(bdd, layer_bottomup);
             if (stats != NULL) {
                 stats->work_candidates_total += layer_candidates;
+                update_peak_candidates(stats, layer_candidates);
                 stats->work_frontier_survivors_total += layer_survivors;
                 update_peak_points(stats, layer_survivors);
             }
@@ -1788,6 +1803,7 @@ ParetoFrontier* BDDMultiObj::pareto_frontier_topdown(MDD* mdd, EnumerationStats*
         const long long layer_survivors = count_mdd_survivors_topdown_layer(mdd, l);
         if (stats != NULL) {
             stats->work_candidates_total += layer_candidates;
+            update_peak_candidates(stats, layer_candidates);
             stats->work_frontier_survivors_total += layer_survivors;
             update_peak_points(stats, layer_survivors);
         }
@@ -1894,6 +1910,7 @@ ParetoFrontier* BDDMultiObj::pareto_frontier_dynamic_layer_cutset(MDD* mdd, Enum
             const long long layer_survivors = count_mdd_survivors_topdown_layer(mdd, layer_topdown);
             if (stats != NULL) {
                 stats->work_candidates_total += layer_candidates;
+                update_peak_candidates(stats, layer_candidates);
                 stats->work_frontier_survivors_total += layer_survivors;
                 update_peak_points(stats, layer_survivors);
             }
@@ -1933,6 +1950,7 @@ ParetoFrontier* BDDMultiObj::pareto_frontier_dynamic_layer_cutset(MDD* mdd, Enum
             const long long layer_survivors = count_mdd_survivors_bottomup_layer(mdd, layer_bottomup);
             if (stats != NULL) {
                 stats->work_candidates_total += layer_candidates;
+                update_peak_candidates(stats, layer_candidates);
                 stats->work_frontier_survivors_total += layer_survivors;
                 update_peak_points(stats, layer_survivors);
             }
