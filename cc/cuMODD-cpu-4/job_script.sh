@@ -5,6 +5,7 @@
 #SBATCH -t 0-03:00
 #SBATCH --mem=20G
 #SBATCH --cpus-per-task=4
+#SBATCH --nodes=1
 export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
 
 # If WHOLE_NODE=1 in config.h file, the following sbatch arguments will be automatically added:
