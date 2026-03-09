@@ -81,8 +81,8 @@ inline void update_peak_candidates(EnumerationStats* stats, const long long valu
     if (stats == NULL) {
         return;
     }
-    if (value > stats->work_peak_candidates) {
-        stats->work_peak_candidates = value;
+    if (value > stats->work_candidates_peak) {
+        stats->work_candidates_peak = value;
     }
 }
 
