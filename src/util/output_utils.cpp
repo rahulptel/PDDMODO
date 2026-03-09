@@ -73,6 +73,20 @@ static string json_escape(const string &value)
     return escaped;
 }
 
+static void write_json_long_array(ostream &out, const vector<long> &values)
+{
+    out << "[";
+    for (size_t i = 0; i < values.size(); ++i)
+    {
+        if (i > 0)
+        {
+            out << ",";
+        }
+        out << values[i];
+    }
+    out << "]";
+}
+
 bool write_frontier_gzip_csv(const ParetoFrontier *frontier, const string &out_path, string *error)
 {
     if (frontier == NULL)
@@ -259,6 +273,9 @@ bool write_stats_jsonl(const string &out_path,
     out << "\"reduced_width\":" << record.reduced_width << ",";
     out << "\"original_num_nodes\":" << record.original_num_nodes << ",";
     out << "\"reduced_num_nodes\":" << record.reduced_num_nodes << ",";
+    out << "\"max_num_nodes_per_layer\":";
+    write_json_long_array(out, record.max_num_nodes_per_layer);
+    out << ",";
     out << "\"layer_coupling\":" << layer_coupling;
     out << "},";
 

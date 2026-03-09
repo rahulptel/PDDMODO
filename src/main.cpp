@@ -36,6 +36,36 @@
 
 using namespace std;
 
+static vector<long> compute_bdd_max_num_nodes_per_layer(const BDD* bdd)
+{
+    vector<long> max_num_nodes_per_layer;
+    if (bdd == NULL)
+    {
+        return max_num_nodes_per_layer;
+    }
+    max_num_nodes_per_layer.reserve(bdd->num_layers);
+    for (int l = 0; l < bdd->num_layers; ++l)
+    {
+        max_num_nodes_per_layer.push_back(static_cast<long>(bdd->layers[l].size()));
+    }
+    return max_num_nodes_per_layer;
+}
+
+static vector<long> compute_mdd_max_num_nodes_per_layer(const MDD* mdd)
+{
+    vector<long> max_num_nodes_per_layer;
+    if (mdd == NULL)
+    {
+        return max_num_nodes_per_layer;
+    }
+    max_num_nodes_per_layer.reserve(mdd->num_layers);
+    for (int l = 0; l < mdd->num_layers; ++l)
+    {
+        max_num_nodes_per_layer.push_back(static_cast<long>(mdd->layers[l].size()));
+    }
+    return max_num_nodes_per_layer;
+}
+
 
 
 //
@@ -80,6 +110,7 @@ int main(int argc, char *argv[])
     long int reduced_width;
     long int original_num_nodes;
     long int reduced_num_nodes;
+    vector<long> max_num_nodes_per_layer;
 
     // Read problem instance and construct BDD
     BDD *bdd = NULL;
@@ -126,6 +157,7 @@ int main(int argc, char *argv[])
 
         // Update node weights
         bddCons.update_node_weights(bdd);
+        max_num_nodes_per_layer = compute_bdd_max_num_nodes_per_layer(bdd);
 
         //        bdd->print();
     }
@@ -149,6 +181,7 @@ int main(int argc, char *argv[])
 
         reduced_width = bdd->get_width();
         reduced_num_nodes = bdd->get_num_nodes();
+        max_num_nodes_per_layer = compute_bdd_max_num_nodes_per_layer(bdd);
     }
 
     // --- TSP ---
@@ -234,6 +267,7 @@ int main(int argc, char *argv[])
         run_summary.reduced_width = -1;
         run_summary.original_num_nodes = -1;
         run_summary.reduced_num_nodes = -1;
+        run_summary.max_num_nodes_per_layer = compute_mdd_max_num_nodes_per_layer(mdd);
 
         enumeration_stats->num_solutions = pareto_frontier->get_num_sols();
         enumeration_stats->cpu_compile_s = ((double)compilation_tsp) / CLOCKS_PER_SEC;
@@ -381,6 +415,7 @@ int main(int argc, char *argv[])
     run_summary.reduced_width = reduced_width;
     run_summary.original_num_nodes = original_num_nodes;
     run_summary.reduced_num_nodes = reduced_num_nodes;
+    run_summary.max_num_nodes_per_layer = max_num_nodes_per_layer;
 
     enumeration_stats->num_solutions = pareto_frontier->get_num_sols();
     enumeration_stats->cpu_compile_s = ((double)compilation_cpu_elapsed) / CLOCKS_PER_SEC;

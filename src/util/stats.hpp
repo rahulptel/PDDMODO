@@ -9,6 +9,7 @@
 
 #include <ctime>
 #include <string>
+#include <vector>
 
 //
 // Enumeration stats populated by BDD/CUDA during frontier enumeration.
@@ -113,6 +114,7 @@ struct DDStats
     long reduced_width;
     long original_num_nodes;
     long reduced_num_nodes;
+    std::vector<long> max_num_nodes_per_layer;
     std::string status_state;
     std::string status_error_message;
 
@@ -121,6 +123,7 @@ struct DDStats
           reduced_width(-1),
           original_num_nodes(-1),
           reduced_num_nodes(-1),
+          max_num_nodes_per_layer(),
           status_state("ok"),
           status_error_message("")
     {

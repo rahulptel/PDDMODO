@@ -135,6 +135,14 @@ JSONL schema notes (`--save-stats`):
   - `work_frontier_survivors_total`
   - `work_frontier_peak_points`
   - `work_join_products_total`
+- `structure` contains:
+  - `original_width`
+  - `reduced_width`
+  - `original_num_nodes`
+  - `reduced_num_nodes`
+  - `max_num_nodes_per_layer`
+  - `layer_coupling`
+- `structure.max_num_nodes_per_layer` is populated from the enumeration DD in all supported branches (BDD and TSP/MDD).
 - Key timing semantics:
   - `wall_enumeration_s` excludes final lexicographic sort.
   - `cpu_total_s = cpu_compile_s + cpu_enumeration_s` (same CPU semantics as stdout line 2).
