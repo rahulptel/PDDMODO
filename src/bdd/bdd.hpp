@@ -94,6 +94,12 @@ struct BDD {
 	// Get number of nodes
 	int get_num_nodes();
 
+	// Get total number of incoming arcs across all layers
+	long get_total_num_in_arcs();
+
+	// Get maximum number of incoming arcs in any layer
+	long get_max_num_in_arcs();
+
 	// Print BDD
 	void print();
 
@@ -283,6 +289,38 @@ inline int BDD::get_num_nodes() {
 		num_nodes += layers[l].size();
 	}
 	return num_nodes;
+}
+
+//
+// Get total number of incoming arcs across all layers
+//
+inline long BDD::get_total_num_in_arcs() {
+	long total_num_in_arcs = 0;
+	for (int l = 0; l < num_layers; ++l) {
+		for (int i = 0; i < layers[l].size(); ++i) {
+			total_num_in_arcs += static_cast<long>(layers[l][i]->prev[0].size());
+			total_num_in_arcs += static_cast<long>(layers[l][i]->prev[1].size());
+		}
+	}
+	return total_num_in_arcs;
+}
+
+//
+// Get maximum number of incoming arcs in any layer
+//
+inline long BDD::get_max_num_in_arcs() {
+	long max_num_in_arcs = 0;
+	for (int l = 0; l < num_layers; ++l) {
+		long layer_in_arcs = 0;
+		for (int i = 0; i < layers[l].size(); ++i) {
+			layer_in_arcs += static_cast<long>(layers[l][i]->prev[0].size());
+			layer_in_arcs += static_cast<long>(layers[l][i]->prev[1].size());
+		}
+		if (layer_in_arcs > max_num_in_arcs) {
+			max_num_in_arcs = layer_in_arcs;
+		}
+	}
+	return max_num_in_arcs;
 }
 
 

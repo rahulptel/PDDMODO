@@ -276,6 +276,8 @@ bool write_stats_jsonl(const string &out_path,
     out << "\"max_num_nodes_per_layer\":";
     write_json_long_array(out, record.max_num_nodes_per_layer);
     out << ",";
+    out << "\"max_num_in_arcs\":" << record.max_num_in_arcs << ",";
+    out << "\"total_num_in_arcs\":" << record.total_num_in_arcs << ",";
     out << "\"layer_coupling\":" << layer_coupling;
     out << "},";
 

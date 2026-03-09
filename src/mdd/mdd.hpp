@@ -175,6 +175,12 @@ struct MDD {
     // Update number of nodes
     void update_num_nodes();
 
+    // Get total number of incoming arcs across all layers
+    long get_total_num_in_arcs() const;
+
+    // Get maximum number of incoming arcs in any layer
+    long get_max_num_in_arcs() const;
+
     // Remove nodes with zero outgoing arcs
     void remove_dangling_outgoing();
 
@@ -675,6 +681,36 @@ inline void MDD::update_num_nodes() {
     for (int l = 0; l < num_layers; ++l) {
         num_nodes += layers[l].size();
     }
+}
+
+//
+// Get total number of incoming arcs across all layers
+//
+inline long MDD::get_total_num_in_arcs() const {
+    long total_num_in_arcs = 0;
+    for (int l = 0; l < num_layers; ++l) {
+        for (int i = 0; i < layers[l].size(); ++i) {
+            total_num_in_arcs += static_cast<long>(layers[l][i]->in_arcs_list.size());
+        }
+    }
+    return total_num_in_arcs;
+}
+
+//
+// Get maximum number of incoming arcs in any layer
+//
+inline long MDD::get_max_num_in_arcs() const {
+    long max_num_in_arcs = 0;
+    for (int l = 0; l < num_layers; ++l) {
+        long layer_in_arcs = 0;
+        for (int i = 0; i < layers[l].size(); ++i) {
+            layer_in_arcs += static_cast<long>(layers[l][i]->in_arcs_list.size());
+        }
+        if (layer_in_arcs > max_num_in_arcs) {
+            max_num_in_arcs = layer_in_arcs;
+        }
+    }
+    return max_num_in_arcs;
 }
     
 

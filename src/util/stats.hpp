@@ -115,6 +115,8 @@ struct DDStats
     long original_num_nodes;
     long reduced_num_nodes;
     std::vector<long> max_num_nodes_per_layer;
+    long max_num_in_arcs;
+    long total_num_in_arcs;
     std::string status_state;
     std::string status_error_message;
 
@@ -124,6 +126,8 @@ struct DDStats
           original_num_nodes(-1),
           reduced_num_nodes(-1),
           max_num_nodes_per_layer(),
+          max_num_in_arcs(-1),
+          total_num_in_arcs(-1),
           status_state("ok"),
           status_error_message("")
     {

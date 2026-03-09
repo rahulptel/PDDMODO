@@ -110,6 +110,8 @@ int main(int argc, char *argv[])
     long int reduced_width;
     long int original_num_nodes;
     long int reduced_num_nodes;
+    long int max_num_in_arcs = 0;
+    long int total_num_in_arcs = 0;
     vector<long> max_num_nodes_per_layer;
 
     // Read problem instance and construct BDD
@@ -158,6 +160,8 @@ int main(int argc, char *argv[])
         // Update node weights
         bddCons.update_node_weights(bdd);
         max_num_nodes_per_layer = compute_bdd_max_num_nodes_per_layer(bdd);
+        max_num_in_arcs = bdd->get_max_num_in_arcs();
+        total_num_in_arcs = bdd->get_total_num_in_arcs();
 
         //        bdd->print();
     }
@@ -182,6 +186,8 @@ int main(int argc, char *argv[])
         reduced_width = bdd->get_width();
         reduced_num_nodes = bdd->get_num_nodes();
         max_num_nodes_per_layer = compute_bdd_max_num_nodes_per_layer(bdd);
+        max_num_in_arcs = bdd->get_max_num_in_arcs();
+        total_num_in_arcs = bdd->get_total_num_in_arcs();
     }
 
     // --- TSP ---
@@ -198,6 +204,9 @@ int main(int argc, char *argv[])
         MDDTSPConstructor mddCons(&inst);
         MDD *mdd = mddCons.generate_exact();
         assert(mdd != NULL);
+        const vector<long> mdd_max_num_nodes_per_layer = compute_mdd_max_num_nodes_per_layer(mdd);
+        long mdd_max_num_in_arcs = mdd->get_max_num_in_arcs();
+        long mdd_total_num_in_arcs = mdd->get_total_num_in_arcs();
 
         compilation_tsp = clock() - compilation_tsp;
         const double compilation_tsp_wall_s = std::chrono::duration_cast<std::chrono::duration<double> >(WallClock::now() - compilation_tsp_wall_begin).count();
@@ -267,7 +276,9 @@ int main(int argc, char *argv[])
         run_summary.reduced_width = -1;
         run_summary.original_num_nodes = -1;
         run_summary.reduced_num_nodes = -1;
-        run_summary.max_num_nodes_per_layer = compute_mdd_max_num_nodes_per_layer(mdd);
+        run_summary.max_num_nodes_per_layer = mdd_max_num_nodes_per_layer;
+        run_summary.max_num_in_arcs = mdd_max_num_in_arcs;
+        run_summary.total_num_in_arcs = mdd_total_num_in_arcs;
 
         enumeration_stats->num_solutions = pareto_frontier->get_num_sols();
         enumeration_stats->cpu_compile_s = ((double)compilation_tsp) / CLOCKS_PER_SEC;
@@ -416,6 +427,8 @@ int main(int argc, char *argv[])
     run_summary.original_num_nodes = original_num_nodes;
     run_summary.reduced_num_nodes = reduced_num_nodes;
     run_summary.max_num_nodes_per_layer = max_num_nodes_per_layer;
+    run_summary.max_num_in_arcs = max_num_in_arcs;
+    run_summary.total_num_in_arcs = total_num_in_arcs;
 
     enumeration_stats->num_solutions = pareto_frontier->get_num_sols();
     enumeration_stats->cpu_compile_s = ((double)compilation_cpu_elapsed) / CLOCKS_PER_SEC;
