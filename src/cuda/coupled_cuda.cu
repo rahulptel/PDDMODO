@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <ctime>
 #include <iostream>
 #include <vector>
@@ -26,6 +27,7 @@
 #include <thrust/functional.h>
 #include <thrust/iterator/counting_iterator.h>
 #include <thrust/iterator/transform_iterator.h>
+#include <thrust/transform_reduce.h>
 
 namespace {
 
@@ -74,6 +76,41 @@ inline bool sample_gpu_memory_peak(std::string* reason,
 }
 
 __host__ __device__ inline int ceil_div(int a, int b) { return (a + b - 1) / b; }
+
+struct SquareToDoubleInt {
+    __host__ __device__ double operator()(const int x) const {
+        const double value = static_cast<double>(x);
+        return value * value;
+    }
+};
+
+inline double population_std_from_sums(const double sum,
+                                       const double sum_sq,
+                                       const long long count) {
+    if (count <= 0) {
+        return 0.0;
+    }
+    const double mean = sum / static_cast<double>(count);
+    double variance = sum_sq / static_cast<double>(count) - mean * mean;
+    if (variance < 0.0) {
+        variance = 0.0;
+    }
+    return std::sqrt(variance);
+}
+
+inline double population_std_from_device_counts(const thrust::device_vector<int>& counts) {
+    const long long count = static_cast<long long>(counts.size());
+    if (count <= 0) {
+        return 0.0;
+    }
+    const long long sum_ll = thrust::reduce(counts.begin(), counts.end(), 0LL, thrust::plus<long long>());
+    const double sum_sq = thrust::transform_reduce(counts.begin(),
+                                                   counts.end(),
+                                                   SquareToDoubleInt(),
+                                                   0.0,
+                                                   thrust::plus<double>());
+    return population_std_from_sums(static_cast<double>(sum_ll), sum_sq, count);
+}
 
 struct HasBothFrontiers {
     const int* td_off;
@@ -598,6 +635,8 @@ bool expand_layer_cuda(
     int kernel_version,
     long long* total_candidates_out,
     long long* total_next_out,
+    double* std_candidates_out,
+    double* std_survivors_out,
     long long* gpu_mem_baseline_used_bytes,
     long long* gpu_mem_peak_used_bytes,
     long long* gpu_mem_peak_reserved_bytes)
@@ -607,6 +646,12 @@ bool expand_layer_cuda(
     }
     if (total_next_out != NULL) {
         *total_next_out = 0;
+    }
+    if (std_candidates_out != NULL) {
+        *std_candidates_out = 0.0;
+    }
+    if (std_survivors_out != NULL) {
+        *std_survivors_out = 0.0;
     }
     if (kernel_version < 1 || kernel_version > 3) {
         return set_reason(reason, "Invalid kernel_version (expected 1, 2, or 3)");
@@ -690,6 +735,9 @@ bool expand_layer_cuda(
         thrust::raw_pointer_cast(d_cc.data()),
         thrust::raw_pointer_cast(d_blocks.data()));
     if (!sync_kernel("dst_counts", reason)) return false;
+    if (std_candidates_out != NULL) {
+        *std_candidates_out = population_std_from_device_counts(d_cc);
+    }
 
     // We no longer sort globally. Candidates remain exactly in the order
     // defined by in_edge_offsets and block_offsets mapping.
@@ -747,6 +795,9 @@ bool expand_layer_cuda(
     if (total_next_out != NULL) {
         *total_next_out = total_next;
     }
+    if (std_survivors_out != NULL) {
+        *std_survivors_out = population_std_from_device_counts(d_next_sizes);
+    }
 
     thrust::exclusive_scan(d_next_sizes.begin(), d_next_sizes.end(), d_next_offsets.begin());
     d_next_offsets[next_nodes] = total_next;
@@ -802,6 +853,10 @@ ParetoFrontier* coupled_cuda_enumerate(MDD* mdd,
     if (mdd->num_layers <= 0) { set_reason(reason, "MDD has zero layers"); return NULL; }
     if (!coupled_cuda_available(reason)) return NULL;
     if (!cuda_ok(cudaSetDevice(0), "cudaSetDevice", reason)) return NULL;
+    if (stats != NULL) {
+        stats->std_candidates_per_layer.clear();
+        stats->std_frontier_survivors_per_layer.clear();
+    }
 
     const int num_layers = mdd->num_layers;
     clock_t t0, t1;
@@ -937,6 +992,7 @@ ParetoFrontier* coupled_cuda_enumerate(MDD* mdd,
                     d_td_offsets, d_td_points,
                     d_ns, d_no, d_np, reason, kernel_version,
                     &layer_candidates, &layer_survivors,
+                    NULL, NULL,
                     NULL, NULL, NULL))
                 return NULL;
             t1 = clock();
@@ -975,6 +1031,7 @@ ParetoFrontier* coupled_cuda_enumerate(MDD* mdd,
                     d_bu_offsets, d_bu_points,
                     d_ns, d_no, d_np, reason, kernel_version,
                     &layer_candidates, &layer_survivors,
+                    NULL, NULL,
                     NULL, NULL, NULL))
                 return NULL;
             t1 = clock();

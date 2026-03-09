@@ -59,6 +59,10 @@ struct EnumerationStats {
     long long work_frontier_survivors_total;
     long long work_frontier_peak_points;
     long long work_join_products_total;
+    // Per-layer population std of node-level candidate counts (methods 1/2 only).
+    std::vector<double> std_candidates_per_layer;
+    // Per-layer population std of node-level frontier survivor counts (methods 1/2 only).
+    std::vector<double> std_frontier_survivors_per_layer;
 
     // Aggregated counters for CPU phases
     int cpu_layers_td;
@@ -93,6 +97,8 @@ struct EnumerationStats {
           work_frontier_survivors_total(0),
           work_frontier_peak_points(0),
           work_join_products_total(0),
+          std_candidates_per_layer(),
+          std_frontier_survivors_per_layer(),
           cpu_layers_td(0),
           cpu_layers_bu(0),
           cpu_nodes_expanded(0),

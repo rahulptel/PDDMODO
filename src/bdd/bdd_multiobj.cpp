@@ -5,6 +5,7 @@
 #include "bdd_multiobj.hpp"
 #include "bdd_alg.hpp"
 #include <chrono>
+#include <cmath>
 #include <limits>
 #include <new>
 
@@ -62,6 +63,8 @@ inline void reset_cpu_metrics_stats(EnumerationStats* stats) {
     stats->work_frontier_survivors_total = 0;
     stats->work_frontier_peak_points = 0;
     stats->work_join_products_total = 0;
+    stats->std_candidates_per_layer.clear();
+    stats->std_frontier_survivors_per_layer.clear();
     stats->cpu_layers_td = 0;
     stats->cpu_layers_bu = 0;
     stats->cpu_nodes_expanded = 0;
@@ -86,21 +89,153 @@ inline void update_peak_candidates(EnumerationStats* stats, const long long valu
     }
 }
 
-inline long long count_bdd_candidates_topdown_layer(BDD* bdd, const int layer, const bool maximization) {
-    long long total = 0;
+inline double population_std_from_sums(const long double sum,
+                                       const long double sum_sq,
+                                       const long long count) {
+    if (count <= 0) {
+        return 0.0;
+    }
+    const long double mean = sum / static_cast<long double>(count);
+    long double variance = sum_sq / static_cast<long double>(count) - mean * mean;
+    if (variance < 0.0L) {
+        variance = 0.0L;
+    }
+    return std::sqrt(static_cast<double>(variance));
+}
+
+inline long long bdd_node_candidates_topdown(const Node* node, const bool maximization) {
+    if (node == NULL) {
+        return 0;
+    }
     const int first_arc_type = maximization ? 1 : 0;
     const int second_arc_type = maximization ? 0 : 1;
+    long long node_candidates = 0;
+    for (Node* prev : node->prev[first_arc_type]) {
+        if (prev != NULL && prev->pareto_frontier != NULL) {
+            node_candidates += prev->pareto_frontier->get_num_sols();
+        }
+    }
+    for (Node* prev : node->prev[second_arc_type]) {
+        if (prev != NULL && prev->pareto_frontier != NULL) {
+            node_candidates += prev->pareto_frontier->get_num_sols();
+        }
+    }
+    return node_candidates;
+}
+
+inline long long bdd_node_candidates_bottomup(const Node* node, const bool maximization) {
+    if (node == NULL) {
+        return 0;
+    }
+    const int first_arc_type = maximization ? 1 : 0;
+    const int second_arc_type = maximization ? 0 : 1;
+    long long node_candidates = 0;
+    if (node->arcs[first_arc_type] != NULL && node->arcs[first_arc_type]->pareto_frontier_bu != NULL) {
+        node_candidates += node->arcs[first_arc_type]->pareto_frontier_bu->get_num_sols();
+    }
+    if (node->arcs[second_arc_type] != NULL && node->arcs[second_arc_type]->pareto_frontier_bu != NULL) {
+        node_candidates += node->arcs[second_arc_type]->pareto_frontier_bu->get_num_sols();
+    }
+    return node_candidates;
+}
+
+inline long long bdd_node_survivors_topdown(const Node* node) {
+    return (node != NULL && node->pareto_frontier != NULL) ? node->pareto_frontier->get_num_sols() : 0;
+}
+
+inline long long bdd_node_survivors_bottomup(const Node* node) {
+    return (node != NULL && node->pareto_frontier_bu != NULL) ? node->pareto_frontier_bu->get_num_sols() : 0;
+}
+
+inline double std_bdd_candidates_topdown_layer(BDD* bdd, const int layer, const bool maximization) {
+    long double sum = 0.0L;
+    long double sum_sq = 0.0L;
+    const long long node_count = bdd->layers[layer].size();
     for (Node* node : bdd->layers[layer]) {
-        for (Node* prev : node->prev[first_arc_type]) {
-            if (prev != NULL && prev->pareto_frontier != NULL) {
-                total += prev->pareto_frontier->get_num_sols();
+        const long long node_candidates = bdd_node_candidates_topdown(node, maximization);
+        const long double node_value = static_cast<long double>(node_candidates);
+        sum += node_value;
+        sum_sq += node_value * node_value;
+    }
+    return population_std_from_sums(sum, sum_sq, node_count);
+}
+
+inline double std_bdd_survivors_topdown_layer(BDD* bdd, const int layer) {
+    long double sum = 0.0L;
+    long double sum_sq = 0.0L;
+    const long long node_count = bdd->layers[layer].size();
+    for (Node* node : bdd->layers[layer]) {
+        const long long node_survivors = bdd_node_survivors_topdown(node);
+        const long double node_value = static_cast<long double>(node_survivors);
+        sum += node_value;
+        sum_sq += node_value * node_value;
+    }
+    return population_std_from_sums(sum, sum_sq, node_count);
+}
+
+inline double std_bdd_candidates_bottomup_layer(BDD* bdd, const int layer, const bool maximization) {
+    long double sum = 0.0L;
+    long double sum_sq = 0.0L;
+    const long long node_count = bdd->layers[layer].size();
+    for (Node* node : bdd->layers[layer]) {
+        const long long node_candidates = bdd_node_candidates_bottomup(node, maximization);
+        const long double node_value = static_cast<long double>(node_candidates);
+        sum += node_value;
+        sum_sq += node_value * node_value;
+    }
+    return population_std_from_sums(sum, sum_sq, node_count);
+}
+
+inline double std_bdd_survivors_bottomup_layer(BDD* bdd, const int layer) {
+    long double sum = 0.0L;
+    long double sum_sq = 0.0L;
+    const long long node_count = bdd->layers[layer].size();
+    for (Node* node : bdd->layers[layer]) {
+        const long long node_survivors = bdd_node_survivors_bottomup(node);
+        const long double node_value = static_cast<long double>(node_survivors);
+        sum += node_value;
+        sum_sq += node_value * node_value;
+    }
+    return population_std_from_sums(sum, sum_sq, node_count);
+}
+
+inline double std_mdd_candidates_topdown_layer(MDD* mdd, const int layer) {
+    long double sum = 0.0L;
+    long double sum_sq = 0.0L;
+    const long long node_count = mdd->layers[layer].size();
+    for (MDDNode* node : mdd->layers[layer]) {
+        long long node_candidates = 0;
+        for (MDDArc* arc : node->in_arcs_list) {
+            if (arc != NULL && arc->tail != NULL && arc->tail->pareto_frontier != NULL) {
+                node_candidates += arc->tail->pareto_frontier->get_num_sols();
             }
         }
-        for (Node* prev : node->prev[second_arc_type]) {
-            if (prev != NULL && prev->pareto_frontier != NULL) {
-                total += prev->pareto_frontier->get_num_sols();
-            }
-        }
+        const long double node_value = static_cast<long double>(node_candidates);
+        sum += node_value;
+        sum_sq += node_value * node_value;
+    }
+    return population_std_from_sums(sum, sum_sq, node_count);
+}
+
+inline double std_mdd_survivors_topdown_layer(MDD* mdd, const int layer) {
+    long double sum = 0.0L;
+    long double sum_sq = 0.0L;
+    const long long node_count = mdd->layers[layer].size();
+    for (MDDNode* node : mdd->layers[layer]) {
+        const long long node_survivors = (node != NULL && node->pareto_frontier != NULL)
+            ? node->pareto_frontier->get_num_sols()
+            : 0;
+        const long double node_value = static_cast<long double>(node_survivors);
+        sum += node_value;
+        sum_sq += node_value * node_value;
+    }
+    return population_std_from_sums(sum, sum_sq, node_count);
+}
+
+inline long long count_bdd_candidates_topdown_layer(BDD* bdd, const int layer, const bool maximization) {
+    long long total = 0;
+    for (Node* node : bdd->layers[layer]) {
+        total += bdd_node_candidates_topdown(node, maximization);
     }
     return total;
 }
@@ -108,24 +243,15 @@ inline long long count_bdd_candidates_topdown_layer(BDD* bdd, const int layer, c
 inline long long count_bdd_survivors_topdown_layer(BDD* bdd, const int layer) {
     long long total = 0;
     for (Node* node : bdd->layers[layer]) {
-        if (node != NULL && node->pareto_frontier != NULL) {
-            total += node->pareto_frontier->get_num_sols();
-        }
+        total += bdd_node_survivors_topdown(node);
     }
     return total;
 }
 
 inline long long count_bdd_candidates_bottomup_layer(BDD* bdd, const int layer, const bool maximization) {
     long long total = 0;
-    const int first_arc_type = maximization ? 1 : 0;
-    const int second_arc_type = maximization ? 0 : 1;
     for (Node* node : bdd->layers[layer]) {
-        if (node->arcs[first_arc_type] != NULL && node->arcs[first_arc_type]->pareto_frontier_bu != NULL) {
-            total += node->arcs[first_arc_type]->pareto_frontier_bu->get_num_sols();
-        }
-        if (node->arcs[second_arc_type] != NULL && node->arcs[second_arc_type]->pareto_frontier_bu != NULL) {
-            total += node->arcs[second_arc_type]->pareto_frontier_bu->get_num_sols();
-        }
+        total += bdd_node_candidates_bottomup(node, maximization);
     }
     return total;
 }
@@ -133,9 +259,7 @@ inline long long count_bdd_candidates_bottomup_layer(BDD* bdd, const int layer, 
 inline long long count_bdd_survivors_bottomup_layer(BDD* bdd, const int layer) {
     long long total = 0;
     for (Node* node : bdd->layers[layer]) {
-        if (node != NULL && node->pareto_frontier_bu != NULL) {
-            total += node->pareto_frontier_bu->get_num_sols();
-        }
+        total += bdd_node_survivors_bottomup(node);
     }
     return total;
 }
@@ -554,6 +678,10 @@ ParetoFrontier* BDDMultiObj::pareto_frontier_topdown(BDD* bdd, bool maximization
 	stats->cpu_state_dominance_s = 0.0;
 	stats->dominance_filtered_total = 0;
     reset_cpu_metrics_stats(stats);
+    if (stats != NULL) {
+        stats->std_candidates_per_layer.assign(bdd->num_layers, 0.0);
+        stats->std_frontier_survivors_per_layer.assign(bdd->num_layers, 0.0);
+    }
     clock_t init;
     const bool metrics_enabled = (stats != NULL);
 	
@@ -572,6 +700,7 @@ ParetoFrontier* BDDMultiObj::pareto_frontier_topdown(BDD* bdd, bool maximization
     bool warned_kernel3_fallback = false;
     for (int l = 1; l < bdd->num_layers; ++l) {
         const long long layer_candidates = count_bdd_candidates_topdown_layer(bdd, l, maximization);
+        const double layer_candidates_std = std_bdd_candidates_topdown_layer(bdd, l, maximization);
         const int layer_size = bdd->layers[l].size();
 
         bool expanded = true;
@@ -608,6 +737,8 @@ ParetoFrontier* BDDMultiObj::pareto_frontier_topdown(BDD* bdd, bool maximization
             update_peak_candidates(stats, layer_candidates);
             stats->work_frontier_survivors_total += layer_survivors;
             update_peak_points(stats, layer_survivors);
+            stats->std_candidates_per_layer[l] = layer_candidates_std;
+            stats->std_frontier_survivors_per_layer[l] = std_bdd_survivors_topdown_layer(bdd, l);
         }
 
         // Deallocate frontier from previous layer
@@ -637,6 +768,10 @@ ParetoFrontier* BDDMultiObj::pareto_frontier_bottomup(BDD* bdd, bool maximizatio
 	(void)problem_type;
 	(void)state_dominance;
 	reset_cpu_metrics_stats(stats);
+    if (stats != NULL) {
+        stats->std_candidates_per_layer.assign(bdd->num_layers, 0.0);
+        stats->std_frontier_survivors_per_layer.assign(bdd->num_layers, 0.0);
+    }
     const bool metrics_enabled = (stats != NULL);
     const int threads = cumodd_normalized_cpu_threads(cpu_threads);
     const bool parallel_mode = cumodd_use_parallel_cpu(threads);
@@ -655,6 +790,7 @@ ParetoFrontier* BDDMultiObj::pareto_frontier_bottomup(BDD* bdd, bool maximizatio
 			// cout << "\tLayer " << l << " - size = " << bdd->layers[l].size();
 			// cout << '\n';
             const long long layer_candidates = count_bdd_candidates_bottomup_layer(bdd, l, maximization);
+            const double layer_candidates_std = std_bdd_candidates_bottomup_layer(bdd, l, maximization);
 
             const int layer_size = bdd->layers[l].size();
             CUMODD_OMP_PARALLEL_FOR_DYNAMIC_IF(parallel_mode, threads)
@@ -679,6 +815,8 @@ ParetoFrontier* BDDMultiObj::pareto_frontier_bottomup(BDD* bdd, bool maximizatio
                     update_peak_candidates(stats, layer_candidates);
                     stats->work_frontier_survivors_total += layer_survivors;
                     update_peak_points(stats, layer_survivors);
+                    stats->std_candidates_per_layer[l] = layer_candidates_std;
+                    stats->std_frontier_survivors_per_layer[l] = std_bdd_survivors_bottomup_layer(bdd, l);
                 }
                 if (metrics_enabled) {
                     stats->cpu_layers_bu += 1;
@@ -690,6 +828,7 @@ ParetoFrontier* BDDMultiObj::pareto_frontier_bottomup(BDD* bdd, bool maximizatio
 				// cout << "\tLayer " << l << " - size = " << bdd->layers[l].size();
 				// cout << '\n';
                 const long long layer_candidates = count_bdd_candidates_bottomup_layer(bdd, l, maximization);
+                const double layer_candidates_std = std_bdd_candidates_bottomup_layer(bdd, l, maximization);
 
             const int layer_size = bdd->layers[l].size();
             CUMODD_OMP_PARALLEL_FOR_DYNAMIC_IF(parallel_mode, threads)
@@ -714,6 +853,8 @@ ParetoFrontier* BDDMultiObj::pareto_frontier_bottomup(BDD* bdd, bool maximizatio
                     update_peak_candidates(stats, layer_candidates);
                     stats->work_frontier_survivors_total += layer_survivors;
                     update_peak_points(stats, layer_survivors);
+                    stats->std_candidates_per_layer[l] = layer_candidates_std;
+                    stats->std_frontier_survivors_per_layer[l] = std_bdd_survivors_bottomup_layer(bdd, l);
                 }
                 if (metrics_enabled) {
                     stats->cpu_layers_bu += 1;
@@ -1762,6 +1903,10 @@ ParetoFrontier* BDDMultiObj::pareto_frontier_topdown(MDD* mdd, EnumerationStats*
 	stats->cpu_state_dominance_s = 0.0;
 	stats->dominance_filtered_total = 0;
     reset_cpu_metrics_stats(stats);
+    if (stats != NULL) {
+        stats->std_candidates_per_layer.assign(mdd->num_layers, 0.0);
+        stats->std_frontier_survivors_per_layer.assign(mdd->num_layers, 0.0);
+    }
     const bool metrics_enabled = (stats != NULL);
     const int threads = cumodd_normalized_cpu_threads(cpu_threads);
     const bool parallel_mode = cumodd_use_parallel_cpu(threads);
@@ -1781,6 +1926,7 @@ ParetoFrontier* BDDMultiObj::pareto_frontier_topdown(MDD* mdd, EnumerationStats*
 	// Generate frontiers for each node
 	for (int l = 1; l < mdd->num_layers; ++l) {	
         const long long layer_candidates = count_mdd_candidates_topdown_layer(mdd, l);
+        const double layer_candidates_std = std_mdd_candidates_topdown_layer(mdd, l);
         const int layer_size = mdd->layers[l].size();
 
         bool expanded = true;
@@ -1806,6 +1952,8 @@ ParetoFrontier* BDDMultiObj::pareto_frontier_topdown(MDD* mdd, EnumerationStats*
             update_peak_candidates(stats, layer_candidates);
             stats->work_frontier_survivors_total += layer_survivors;
             update_peak_points(stats, layer_survivors);
+            stats->std_candidates_per_layer[l] = layer_candidates_std;
+            stats->std_frontier_survivors_per_layer[l] = std_mdd_survivors_topdown_layer(mdd, l);
         }
         if (metrics_enabled) {
             stats->cpu_layers_td += 1;

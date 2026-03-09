@@ -142,6 +142,10 @@ JSONL schema notes (`--save-stats`):
   - `reduced_num_nodes`
   - `max_num_nodes_per_layer`
   - `layer_coupling`
+- `metrics` additionally contains:
+  - `std_candidates_per_layer`
+  - `std_frontier_survivors_per_layer`
+- `metrics.std_candidates_per_layer` and `metrics.std_frontier_survivors_per_layer` are full layer-indexed arrays for methods `1`/`2`, and are `[]` for method `3`.
 - `structure.max_num_nodes_per_layer` is populated from the enumeration DD in all supported branches (BDD and TSP/MDD).
 - Key timing semantics:
   - `wall_enumeration_s` excludes final lexicographic sort.

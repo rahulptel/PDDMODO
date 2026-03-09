@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <ctime>
 #include <iostream>
 #include <vector>
@@ -21,10 +22,12 @@
 #include <thrust/host_vector.h>
 #include <thrust/iterator/constant_iterator.h>
 #include <thrust/iterator/counting_iterator.h>
+#include <thrust/functional.h>
 #include <thrust/reduce.h>
 #include <thrust/scan.h>
 #include <thrust/sequence.h>
 #include <thrust/sort.h>
+#include <thrust/transform_reduce.h>
 
 namespace {
 
@@ -114,6 +117,41 @@ inline bool sample_gpu_memory_peak(std::string* reason,
         *peak_used_bytes = delta_used_bytes;
     }
     return true;
+}
+
+struct SquareToDoubleInt {
+    __host__ __device__ double operator()(const int x) const {
+        const double value = static_cast<double>(x);
+        return value * value;
+    }
+};
+
+inline double population_std_from_sums(const double sum,
+                                       const double sum_sq,
+                                       const long long count) {
+    if (count <= 0) {
+        return 0.0;
+    }
+    const double mean = sum / static_cast<double>(count);
+    double variance = sum_sq / static_cast<double>(count) - mean * mean;
+    if (variance < 0.0) {
+        variance = 0.0;
+    }
+    return std::sqrt(variance);
+}
+
+inline double population_std_from_device_counts(const thrust::device_vector<int>& counts) {
+    const long long count = static_cast<long long>(counts.size());
+    if (count <= 0) {
+        return 0.0;
+    }
+    const long long sum_ll = thrust::reduce(counts.begin(), counts.end(), 0LL, thrust::plus<long long>());
+    const double sum_sq = thrust::transform_reduce(counts.begin(),
+                                                   counts.end(),
+                                                   SquareToDoubleInt(),
+                                                   0.0,
+                                                   thrust::plus<double>());
+    return population_std_from_sums(static_cast<double>(sum_ll), sum_sq, count);
 }
 
 class ScopedCudaEventTimer {
@@ -869,6 +907,8 @@ ParetoFrontier* topdown_cuda_enumerate(BDD* bdd,
             return NULL;
         }
         gpu_mem_peak_reserved_bytes = gpu_mem_baseline_used_bytes;
+        stats->std_candidates_per_layer.assign(bdd->num_layers, 0.0);
+        stats->std_frontier_survivors_per_layer.assign(bdd->num_layers, 0.0);
     }
 
     const int root_idx = bdd->get_root()->index;
@@ -988,6 +1028,7 @@ ParetoFrontier* topdown_cuda_enumerate(BDD* bdd,
         const int prev_nodes = bdd->layers[l - 1].size();
         const int next_nodes = bdd->layers[l].size();
         long long layer_candidates = 0;
+        double layer_candidates_std = 0.0;
         if (d_prev_offsets.size() != static_cast<size_t>(prev_nodes + 1)) {
             set_reason(reason, "Previous offsets size does not match layer size");
             return NULL;
@@ -996,6 +1037,7 @@ ParetoFrontier* topdown_cuda_enumerate(BDD* bdd,
         thrust::device_vector<int> d_next_sizes(next_nodes, 0);
         thrust::device_vector<int> d_next_offsets(next_nodes + 1, 0);
         thrust::device_vector<ObjType> d_next_points;
+        thrust::device_vector<int> d_cand_counts(next_nodes, 0);
 
         PackedCudaLayer& packed = packed_layers[l];
         const int num_edges = packed.edge_src.size();
@@ -1058,7 +1100,6 @@ ParetoFrontier* topdown_cuda_enumerate(BDD* bdd,
                 }
 
                 thrust::device_vector<int> d_alive(total_candidates, 0);
-                thrust::device_vector<int> d_cand_counts(next_nodes, 0);
                 thrust::device_vector<int> d_dst_blocks;
                 if (kernel_version == 3) {
                     d_dst_blocks.assign(next_nodes, 0);
@@ -1098,6 +1139,7 @@ ParetoFrontier* topdown_cuda_enumerate(BDD* bdd,
                         return NULL;
                     }
                 }
+                layer_candidates_std = population_std_from_device_counts(d_cand_counts);
 
                 const int max_seg_size = thrust::reduce(d_cand_counts.begin(),
                                                         d_cand_counts.end(),
@@ -1232,10 +1274,13 @@ ParetoFrontier* topdown_cuda_enumerate(BDD* bdd,
         }
         if (stats != NULL) {
             const long long layer_survivors = d_next_points.size() / NOBJS;
+            const double layer_survivors_std = population_std_from_device_counts(d_next_sizes);
             stats->work_candidates_total += layer_candidates;
             stats->work_candidates_peak = std::max(stats->work_candidates_peak, layer_candidates);
             stats->work_frontier_survivors_total += layer_survivors;
             stats->work_frontier_peak_points = std::max(stats->work_frontier_peak_points, layer_survivors);
+            stats->std_candidates_per_layer[l] = layer_candidates_std;
+            stats->std_frontier_survivors_per_layer[l] = layer_survivors_std;
             if (!sample_gpu_memory_peak(reason, gpu_mem_baseline_used_bytes, &gpu_mem_peak_used_bytes, &gpu_mem_peak_reserved_bytes)) {
                 return NULL;
             }
@@ -1297,6 +1342,8 @@ ParetoFrontier* topdown_mdd_cuda_enumerate(MDD* mdd,
     if (stats != NULL) {
         if (!capture_gpu_memory_used(reason, &gpu_mem_baseline_used_bytes)) return NULL;
         gpu_mem_peak_reserved_bytes = gpu_mem_baseline_used_bytes;
+        stats->std_candidates_per_layer.assign(mdd->num_layers, 0.0);
+        stats->std_frontier_survivors_per_layer.assign(mdd->num_layers, 0.0);
     }
 
     const int num_layers = mdd->num_layers;
@@ -1359,6 +1406,8 @@ ParetoFrontier* topdown_mdd_cuda_enumerate(MDD* mdd,
         thrust::device_vector<ObjType> d_np;
         long long layer_candidates = 0;
         long long layer_survivors = 0;
+        double layer_candidates_std = 0.0;
+        double layer_survivors_std = 0.0;
 
         ScopedCudaEventTimer layer_expand_timer("cudaEventCreate/expand_layer_cuda", reason);
         if (!layer_expand_timer.ok()) {
@@ -1374,6 +1423,7 @@ ParetoFrontier* topdown_mdd_cuda_enumerate(MDD* mdd,
                     d_td_offsets, d_td_points,
                     d_ns, d_no, d_np, reason, kernel_version,
                     &layer_candidates, &layer_survivors,
+                    &layer_candidates_std, &layer_survivors_std,
                     stats != NULL ? &gpu_mem_baseline_used_bytes : NULL,
                     stats != NULL ? &gpu_mem_peak_used_bytes : NULL,
                     stats != NULL ? &gpu_mem_peak_reserved_bytes : NULL)) {
@@ -1389,6 +1439,8 @@ ParetoFrontier* topdown_mdd_cuda_enumerate(MDD* mdd,
             stats->work_candidates_peak = std::max(stats->work_candidates_peak, layer_candidates);
             stats->work_frontier_survivors_total += layer_survivors;
             stats->work_frontier_peak_points = std::max(stats->work_frontier_peak_points, layer_survivors);
+            stats->std_candidates_per_layer[l] = layer_candidates_std;
+            stats->std_frontier_survivors_per_layer[l] = layer_survivors_std;
             if (!sample_gpu_memory_peak(reason, gpu_mem_baseline_used_bytes, &gpu_mem_peak_used_bytes, &gpu_mem_peak_reserved_bytes)) return NULL;
         }
 

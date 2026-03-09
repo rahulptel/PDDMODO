@@ -87,6 +87,20 @@ static void write_json_long_array(ostream &out, const vector<long> &values)
     out << "]";
 }
 
+static void write_json_double_array(ostream &out, const vector<double> &values)
+{
+    out << "[";
+    for (size_t i = 0; i < values.size(); ++i)
+    {
+        if (i > 0)
+        {
+            out << ",";
+        }
+        out << values[i];
+    }
+    out << "]";
+}
+
 bool write_frontier_gzip_csv(const ParetoFrontier *frontier, const string &out_path, string *error)
 {
     if (frontier == NULL)
@@ -207,6 +221,13 @@ bool write_stats_jsonl(const string &out_path,
     const long long work_frontier_survivors_total = stats != NULL ? stats->work_frontier_survivors_total : 0;
     const long long work_frontier_peak_points = stats != NULL ? stats->work_frontier_peak_points : 0;
     const long long work_join_products_total = stats != NULL ? stats->work_join_products_total : 0;
+    static const vector<double> kEmptyDoubleVector;
+    const vector<double> &std_candidates_per_layer = stats != NULL
+        ? stats->std_candidates_per_layer
+        : kEmptyDoubleVector;
+    const vector<double> &std_frontier_survivors_per_layer = stats != NULL
+        ? stats->std_frontier_survivors_per_layer
+        : kEmptyDoubleVector;
 
     out << "{";
     out << "\"schema_version\":1,";
@@ -291,7 +312,12 @@ bool write_stats_jsonl(const string &out_path,
     out << "\"cpu_layers_td\":" << (stats != NULL ? stats->cpu_layers_td : 0) << ",";
     out << "\"cpu_layers_bu\":" << (stats != NULL ? stats->cpu_layers_bu : 0) << ",";
     out << "\"cpu_nodes_expanded\":" << (stats != NULL ? stats->cpu_nodes_expanded : 0) << ",";
-    out << "\"cpu_cutset_size\":" << (stats != NULL ? stats->cpu_cutset_size : 0);
+    out << "\"cpu_cutset_size\":" << (stats != NULL ? stats->cpu_cutset_size : 0) << ",";
+    out << "\"std_candidates_per_layer\":";
+    write_json_double_array(out, std_candidates_per_layer);
+    out << ",";
+    out << "\"std_frontier_survivors_per_layer\":";
+    write_json_double_array(out, std_frontier_survivors_per_layer);
     out << "},";
 
     out << "\"status\":{";
