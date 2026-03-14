@@ -8,6 +8,7 @@
 #include <cmath>
 #include <limits>
 #include <new>
+#include <stdexcept>
 
 #include "../cuda/cuda_wrappers.hpp"
 #include "../util/omp_compat.hpp"
@@ -38,6 +39,10 @@ inline bool SetPackingStateMinElementSmallestToLargestComp(Node* l, Node* r) {
 }
 
 typedef std::chrono::steady_clock WallClock;
+
+inline void throw_cpu_kernel3_allocation_failure(const char* context) {
+    throw std::runtime_error(std::string("CPU kernel 3 allocation failure: ") + context);
+}
 
 inline double wall_elapsed_s(const WallClock::time_point& start) {
     return std::chrono::duration_cast<std::chrono::duration<double> >(WallClock::now() - start).count();
@@ -697,7 +702,6 @@ ParetoFrontier* BDDMultiObj::pareto_frontier_topdown(BDD* bdd, bool maximization
 	bdd->get_root()->pareto_frontier->add(zero_array);
 
     const bool use_kernel3 = (cpu_topdown_kernel == 3);
-    bool warned_kernel3_fallback = false;
     for (int l = 1; l < bdd->num_layers; ++l) {
         const long long layer_candidates = count_bdd_candidates_topdown_layer(bdd, l, maximization);
         const double layer_candidates_std = std_bdd_candidates_topdown_layer(bdd, l, maximization);
@@ -708,14 +712,10 @@ ParetoFrontier* BDDMultiObj::pareto_frontier_topdown(BDD* bdd, bool maximization
             try {
                 expanded = expand_layer_topdown_cpu_kernel3(bdd, l, maximization, mgmr, parallel_mode, threads);
             } catch (const std::bad_alloc&) {
-                expanded = false;
+                throw_cpu_kernel3_allocation_failure("top-down BDD");
             }
             if (!expanded) {
-                if (!warned_kernel3_fallback) {
-                    std::cerr << "Warning - CPU top-down kernel 3 fell back to kernel 1 due to memory pressure." << std::endl;
-                    warned_kernel3_fallback = true;
-                }
-                expand_layer_topdown_cpu_kernel1(bdd, l, maximization, mgmr, parallel_mode, threads);
+                throw_cpu_kernel3_allocation_failure("top-down BDD");
             }
         } else {
             expand_layer_topdown_cpu_kernel1(bdd, l, maximization, mgmr, parallel_mode, threads);
@@ -1410,7 +1410,6 @@ ParetoFrontier* BDDMultiObj::pareto_frontier_dynamic_layer_cutset(BDD* bdd, bool
 	int val_topdown = 0;
 	int val_bottomup = 0;
     const bool use_coupled_kernel3 = (cpu_coupled_kernel == 3);
-    bool warned_coupled_kernel3_fallback = false;
 
 	while (layer_topdown != layer_bottomup) {
 //		if (layer_topdown <= 3) {
@@ -1424,14 +1423,10 @@ ParetoFrontier* BDDMultiObj::pareto_frontier_dynamic_layer_cutset(BDD* bdd, bool
                 try {
                     expanded = expand_layer_topdown_cpu_kernel3_coupled(bdd, layer_topdown, maximization, mgmr, parallel_mode, threads);
                 } catch (const std::bad_alloc&) {
-                    expanded = false;
+                    throw_cpu_kernel3_allocation_failure("coupled BDD top-down");
                 }
                 if (!expanded) {
-                    if (!warned_coupled_kernel3_fallback) {
-                        std::cerr << "Warning - CPU coupled kernel 3 fell back to kernel 1 due to memory pressure." << std::endl;
-                        warned_coupled_kernel3_fallback = true;
-                    }
-                    expand_layer_topdown(bdd, layer_topdown, maximization, mgmr, threads);
+                    throw_cpu_kernel3_allocation_failure("coupled BDD top-down");
                 }
             } else {
                 expand_layer_topdown(bdd, layer_topdown, maximization, mgmr, threads);
@@ -1474,14 +1469,10 @@ ParetoFrontier* BDDMultiObj::pareto_frontier_dynamic_layer_cutset(BDD* bdd, bool
                 try {
                     expanded = expand_layer_bottomup_cpu_kernel3_coupled(bdd, layer_bottomup, maximization, mgmr, parallel_mode, threads);
                 } catch (const std::bad_alloc&) {
-                    expanded = false;
+                    throw_cpu_kernel3_allocation_failure("coupled BDD bottom-up");
                 }
                 if (!expanded) {
-                    if (!warned_coupled_kernel3_fallback) {
-                        std::cerr << "Warning - CPU coupled kernel 3 fell back to kernel 1 due to memory pressure." << std::endl;
-                        warned_coupled_kernel3_fallback = true;
-                    }
-                    expand_layer_bottomup(bdd, layer_bottomup, maximization, mgmr, threads);
+                    throw_cpu_kernel3_allocation_failure("coupled BDD bottom-up");
                 }
             } else {
                 expand_layer_bottomup(bdd, layer_bottomup, maximization, mgmr, threads);
@@ -1921,7 +1912,6 @@ ParetoFrontier* BDDMultiObj::pareto_frontier_topdown(MDD* mdd, EnumerationStats*
 	mdd->get_root()->pareto_frontier->add(zero_array);
 
     const bool use_topdown_kernel3 = (cpu_topdown_kernel == 3);
-    bool warned_topdown_kernel3_fallback = false;
     
 	// Generate frontiers for each node
 	for (int l = 1; l < mdd->num_layers; ++l) {	
@@ -1934,14 +1924,10 @@ ParetoFrontier* BDDMultiObj::pareto_frontier_topdown(MDD* mdd, EnumerationStats*
             try {
                 expanded = expand_layer_topdown_cpu_kernel3_mdd(mdd, l, mgmr, parallel_mode, threads);
             } catch (const std::bad_alloc&) {
-                expanded = false;
+                throw_cpu_kernel3_allocation_failure("top-down MDD");
             }
             if (!expanded) {
-                if (!warned_topdown_kernel3_fallback) {
-                    std::cerr << "Warning - CPU top-down kernel 3 (MDD) fell back to kernel 1 due to memory pressure." << std::endl;
-                    warned_topdown_kernel3_fallback = true;
-                }
-                expand_layer_topdown_cpu_kernel1_mdd(mdd, l, mgmr, parallel_mode, threads);
+                throw_cpu_kernel3_allocation_failure("top-down MDD");
             }
         } else {
             expand_layer_topdown_cpu_kernel1_mdd(mdd, l, mgmr, parallel_mode, threads);
@@ -2018,7 +2004,6 @@ ParetoFrontier* BDDMultiObj::pareto_frontier_dynamic_layer_cutset(MDD* mdd, Enum
 	int val_topdown = 0;
 	int val_bottomup = 0;
     const bool use_coupled_kernel3 = (cpu_coupled_kernel == 3);
-    bool warned_coupled_kernel3_fallback = false;
 
 	while (layer_topdown != layer_bottomup) {
 		// cout << "Layer topdown: " << layer_topdown << " - layer bottomup: " << layer_bottomup << endl;
@@ -2032,14 +2017,10 @@ ParetoFrontier* BDDMultiObj::pareto_frontier_dynamic_layer_cutset(MDD* mdd, Enum
                 try {
                     expanded = expand_layer_topdown_cpu_kernel3_mdd(mdd, layer_topdown, mgmr, parallel_mode, threads);
                 } catch (const std::bad_alloc&) {
-                    expanded = false;
+                    throw_cpu_kernel3_allocation_failure("coupled MDD top-down");
                 }
                 if (!expanded) {
-                    if (!warned_coupled_kernel3_fallback) {
-                        std::cerr << "Warning - CPU coupled kernel 3 (MDD) fell back to kernel 1 due to memory pressure." << std::endl;
-                        warned_coupled_kernel3_fallback = true;
-                    }
-                    expand_layer_topdown_cpu_kernel1_mdd(mdd, layer_topdown, mgmr, parallel_mode, threads);
+                    throw_cpu_kernel3_allocation_failure("coupled MDD top-down");
                 }
             } else {
                 expand_layer_topdown_cpu_kernel1_mdd(mdd, layer_topdown, mgmr, parallel_mode, threads);
@@ -2072,14 +2053,10 @@ ParetoFrontier* BDDMultiObj::pareto_frontier_dynamic_layer_cutset(MDD* mdd, Enum
                 try {
                     expanded = expand_layer_bottomup_cpu_kernel3_mdd(mdd, layer_bottomup, mgmr, parallel_mode, threads);
                 } catch (const std::bad_alloc&) {
-                    expanded = false;
+                    throw_cpu_kernel3_allocation_failure("coupled MDD bottom-up");
                 }
                 if (!expanded) {
-                    if (!warned_coupled_kernel3_fallback) {
-                        std::cerr << "Warning - CPU coupled kernel 3 (MDD) fell back to kernel 1 due to memory pressure." << std::endl;
-                        warned_coupled_kernel3_fallback = true;
-                    }
-                    expand_layer_bottomup_cpu_kernel1_mdd(mdd, layer_bottomup, mgmr, parallel_mode, threads);
+                    throw_cpu_kernel3_allocation_failure("coupled MDD bottom-up");
                 }
             } else {
                 expand_layer_bottomup_cpu_kernel1_mdd(mdd, layer_bottomup, mgmr, parallel_mode, threads);

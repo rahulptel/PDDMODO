@@ -77,7 +77,7 @@ else
       IS_GPU_CASE=1
     fi
 
-    CPU_OOM_PATTERN='std::bad_alloc|cannot allocate memory|out of memory|oom'
+    CPU_OOM_PATTERN='CPU kernel 3 allocation failure|std::bad_alloc|cannot allocate memory|out of memory|oom'
     GPU_OOM_PATTERN='cudaErrorMemoryAllocation|CUDA_ERROR_OUT_OF_MEMORY|CUBLAS_STATUS_ALLOC_FAILED|thrust::system::system_error|hipErrorOutOfMemory|failed to allocate device memory|CUDA out of memory|out of memory'
 
     OOM_MATCHED=0

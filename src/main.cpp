@@ -8,6 +8,7 @@
 #include <string>
 #include <cstdio>
 #include <chrono>
+#include <exception>
 #include <iomanip>
 #include <fstream>
 
@@ -230,7 +231,12 @@ int main(int argc, char *argv[])
                     exit(1);
                 }
             } else {
-                pareto_frontier = BDDMultiObj::pareto_frontier_topdown(mdd, enumeration_stats, cpu_threads, cpu_kernel);
+                try {
+                    pareto_frontier = BDDMultiObj::pareto_frontier_topdown(mdd, enumeration_stats, cpu_threads, cpu_kernel);
+                } catch (const std::exception& e) {
+                    cout << "Error - CPU backend enumeration failed: " << e.what() << endl;
+                    exit(1);
+                }
             }
         } else if (method == 3) { // Coupled
             if (backend == BACKEND_GPU) {
@@ -243,7 +249,12 @@ int main(int argc, char *argv[])
                     exit(1);
                 }
             } else {
-                pareto_frontier = BDDMultiObj::pareto_frontier_dynamic_layer_cutset(mdd, enumeration_stats, cpu_threads, cpu_kernel);
+                try {
+                    pareto_frontier = BDDMultiObj::pareto_frontier_dynamic_layer_cutset(mdd, enumeration_stats, cpu_threads, cpu_kernel);
+                } catch (const std::exception& e) {
+                    cout << "Error - CPU backend enumeration failed: " << e.what() << endl;
+                    exit(1);
+                }
             }
         } else {
             cout << "Error - method " << method << " not valid for TSP" << endl;
@@ -338,7 +349,15 @@ int main(int argc, char *argv[])
         }
         else
         {
-            pareto_frontier = BDDMultiObj::pareto_frontier_topdown(bdd, maximization, problem_type, state_dominance, enumeration_stats, cpu_threads, cpu_kernel);
+            try
+            {
+                pareto_frontier = BDDMultiObj::pareto_frontier_topdown(bdd, maximization, problem_type, state_dominance, enumeration_stats, cpu_threads, cpu_kernel);
+            }
+            catch (const std::exception &e)
+            {
+                cout << "Error - CPU backend enumeration failed: " << e.what() << endl;
+                exit(1);
+            }
         }
     }
     else if (method == 2)
@@ -359,7 +378,15 @@ int main(int argc, char *argv[])
             cout << "Error - GPU backend is unsupported for method 3." << endl;
             exit(1);
         }
-        pareto_frontier = BDDMultiObj::pareto_frontier_dynamic_layer_cutset(bdd, maximization, problem_type, state_dominance, enumeration_stats, cpu_threads, cpu_kernel);
+        try
+        {
+            pareto_frontier = BDDMultiObj::pareto_frontier_dynamic_layer_cutset(bdd, maximization, problem_type, state_dominance, enumeration_stats, cpu_threads, cpu_kernel);
+        }
+        catch (const std::exception &e)
+        {
+            cout << "Error - CPU backend enumeration failed: " << e.what() << endl;
+            exit(1);
+        }
     }
     else
     {
