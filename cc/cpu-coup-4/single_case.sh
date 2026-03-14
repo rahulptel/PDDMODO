@@ -4,6 +4,13 @@
 TABLE1=$1
 i1=$2
 
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+FARM_NAME="$(basename "$SCRIPT_DIR")"
+DEFAULT_ROOT_DIR="$(CDPATH= cd -- "$SCRIPT_DIR/../.." && pwd)"
+ROOT_DIR="${ROOT_DIR:-$DEFAULT_ROOT_DIR}"
+RUNS_DIR="$ROOT_DIR/outputs/$FARM_NAME"
+STATUS_DIR="$SCRIPT_DIR/STATUSES"
+
 # Total number of cases:
 ## If the env. variable N_cases is defined, using it, otherwise computing the number of lines in the table:
 if test -z $N_cases
@@ -33,9 +40,9 @@ METAJOB_ID=${SLURM_ARRAY_JOB_ID}_${SLURM_ARRAY_TASK_ID}
 #  $METAJOB_ID is the jobid for the current meta-job (convenient for creating per-job files)
 
 # If you do not want each case to be computed inside a separate subdirectory, comment out the following two lines
-# and also comment out the line "cd .." below!
-mkdir -p RUN$ID
-cd RUN$ID
+# and also comment out the line that changes back to the farm directory below.
+mkdir -p "$RUNS_DIR/RUN$ID"
+cd "$RUNS_DIR/RUN$ID"
 
 echo "Case $ID:"
 
@@ -97,10 +104,11 @@ else
   fi
 fi
 
-# Comment out this line if not creating a seoarate subdirectory for each case:
-cd ..
+# Comment out this line if not creating a separate subdirectory for each case:
+cd "$SCRIPT_DIR"
 
 # +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
 # Saving all current metajob statuses to a single file with a unique name:
-echo $ID $STATUS >> STATUSES/status.$METAJOB_ID
+mkdir -p "$STATUS_DIR"
+echo $ID $STATUS >> "$STATUS_DIR/status.$METAJOB_ID"
