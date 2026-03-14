@@ -51,7 +51,7 @@ def append_case(lines, binary, instance, problem_type, method, dominance):
         return
 
     if INCLUDE_CPU_KERNELS:
-        for cpu_kernel in (1, 3):
+        for cpu_kernel in (1,):
             lines.append(
                 f"{binary} {instance} {problem_type} {method} {dominance} --backend cpu --cpu-threads {CPU_WORKERS} --cpu-kernel {cpu_kernel} --save-frontier --save-stats"
             )
