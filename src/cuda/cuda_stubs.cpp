@@ -6,33 +6,30 @@
 #include "../bdd/bdd.hpp"
 #include "../bdd/bdd_multiobj.hpp"
 
-ParetoFrontier* topdown_cuda_enumerate(BDD* bdd, bool maximization, const int problem_type, const int state_dominance, EnumerationStats* stats, std::string* reason, int kernel_version) {
+ParetoFrontier* topdown_cuda_enumerate(BDD* bdd, bool maximization, const int problem_type, const int state_dominance, EnumerationStats* stats, std::string* reason) {
     (void)bdd;
     (void)maximization;
     (void)problem_type;
     (void)state_dominance;
     (void)stats;
-    (void)kernel_version;
     if (reason != NULL) {
         *reason = "GPU backend requested but binary was built without CUDA support";
     }
     return NULL;
 }
 
-ParetoFrontier* topdown_mdd_cuda_enumerate(MDD* mdd, EnumerationStats* stats, std::string* reason, int kernel_version) {
+ParetoFrontier* topdown_mdd_cuda_enumerate(MDD* mdd, EnumerationStats* stats, std::string* reason) {
     (void)mdd;
     (void)stats;
-    (void)kernel_version;
     if (reason != NULL) {
         *reason = "GPU backend requested but binary was built without CUDA support";
     }
     return NULL;
 }
 
-ParetoFrontier* coupled_cuda_enumerate(MDD* mdd, EnumerationStats* stats, std::string* reason, int kernel_version) {
+ParetoFrontier* coupled_cuda_enumerate(MDD* mdd, EnumerationStats* stats, std::string* reason) {
     (void)mdd;
     (void)stats;
-    (void)kernel_version;
     if (reason != NULL) {
         *reason = "GPU backend requested but binary was built without CUDA support";
     }

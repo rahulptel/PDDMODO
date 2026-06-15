@@ -18,7 +18,7 @@ CliOptions::CliOptions()
       state_dominance(0),
       backend(BACKEND_CPU),
       cpu_threads(1),
-      kernel_version(-1),
+      kernel_version(0),
       cpu_kernel(CPU_KERNEL_1),
       save_frontier(false),
       save_stats(false)
@@ -128,10 +128,10 @@ void print_usage()
     cout << "\t\t\t--backend cpu|gpu\n";
     cout << "\t\t\t--cpu-threads <N>   (cpu only)\n";
     cout << "\t\t\t--cpu-kernel <K>    (cpu only, methods 1 and 3, K in {1,3})\n";
-    cout << "\t\t\t--kernel <K>        (gpu only, K in {1,2,3})\n";
+    cout << "\t\t\t--kernel 3          (gpu only, optional compatibility flag)\n";
     cout << "\t\tShorthand backend options:\n";
     cout << "\t\t\tcpu [N]\n";
-    cout << "\t\t\tgpu [K]\n";
+    cout << "\t\t\tgpu [3]\n";
     cout << "\t\tbackend omitted defaults to cpu\n";
 #if CUMODD_HAS_OPENMP
     cout << "\t\tcpu threads default to OMP_NUM_THREADS if valid, otherwise 1\n";
@@ -141,13 +141,7 @@ void print_usage()
 #endif
 
     cout << "\n";
-    cout << "\t\tkernel = 1: one block per node\n";
-    cout << "\t\tkernel = 2: fixed number of blocks per node (2D grid)\n";
-    cout << "\t\tkernel = 3: dynamic blocks per node with binary-search destination lookup (1D grid)\n";
-    cout << "\t\tkernel omitted with backend=gpu: defaults by problem type\n";
-    cout << "\t\t\tproblem_type=1 (knapsack): 1\n";
-    cout << "\t\t\tproblem_type=2 (set packing): 2\n";
-    cout << "\t\t\tproblem_type=3 (TSP): 3\n";
+    cout << "\t\tGPU uses kernel 3: dynamic blocks per node with binary-search destination lookup (1D grid)\n";
 
     cout << "\n";
     cout << "\t\t--save-frontier: save Pareto frontier to <input_stem>.frontier.csv.gz\n";
@@ -301,16 +295,16 @@ bool parse_cli_args(int argc, char *argv[], CliOptions *out, string *error)
             {
                 if (error != NULL)
                 {
-                    *error = "Error - --kernel requires a value in {1,2,3}.";
+                    *error = "Error - --kernel requires value 3.";
                 }
                 return false;
             }
             string value(argv[++i]);
-            if (!parse_positive_int(value, &opts.kernel_version) || opts.kernel_version < 1 || opts.kernel_version > 3)
+            if (!parse_positive_int(value, &opts.kernel_version) || opts.kernel_version != 3)
             {
                 if (error != NULL)
                 {
-                    *error = "Error - invalid --kernel value '" + value + "' (expected 1, 2, or 3).";
+                    *error = "Error - invalid --kernel value '" + value + "' (GPU only supports kernel 3).";
                 }
                 return false;
             }
@@ -411,11 +405,11 @@ bool parse_cli_args(int argc, char *argv[], CliOptions *out, string *error)
                             }
                             return false;
                         }
-                        if (parsed_raw < 1 || parsed_raw > 3)
+                        if (parsed_raw != 3)
                         {
                             if (error != NULL)
                             {
-                                *error = "Error - invalid gpu shorthand kernel '" + next_token + "' (expected 1, 2, or 3).";
+                                *error = "Error - invalid gpu shorthand kernel '" + next_token + "' (GPU only supports kernel 3).";
                             }
                             return false;
                         }
@@ -546,20 +540,9 @@ bool parse_cli_args(int argc, char *argv[], CliOptions *out, string *error)
         }
         return false;
     }
-    if (opts.backend == BACKEND_GPU && !kernel_version_set)
+    if (opts.backend == BACKEND_GPU)
     {
-        if (opts.problem_type == 1)
-        {
-            opts.kernel_version = 1;
-        }
-        else if (opts.problem_type == 2)
-        {
-            opts.kernel_version = 2;
-        }
-        else if (opts.problem_type == 3)
-        {
-            opts.kernel_version = 3;
-        }
+        opts.kernel_version = 3;
     }
     else if (opts.backend == BACKEND_CPU)
     {
