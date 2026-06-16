@@ -531,6 +531,191 @@ bool expand_layer_cuda(
         return true;
     }
 
+    thrust::device_vector<int> d_cc(next_nodes, 0);
+    thrust::device_vector<int> d_blocks(next_nodes, 0);
+
+    compute_dst_candidate_counts_kernel<<<ceil_div(next_nodes, kThreadsPerBlock), kThreadsPerBlock>>>(
+        thrust::raw_pointer_cast(in_edge_offsets.data()),
+        thrust::raw_pointer_cast(d_eo.data()),
+        next_nodes,
+        thrust::raw_pointer_cast(d_cc.data()),
+        thrust::raw_pointer_cast(d_blocks.data()));
+    if (!sync_kernel("dst_counts", reason)) return false;
+    if (std_candidates_out != NULL) {
+        *std_candidates_out = population_std_from_device_counts(d_cc);
+    }
+
+    const long long max_candidate_points_per_batch = 2000000LL;
+    if (total_cand > max_candidate_points_per_batch) {
+        thrust::host_vector<int> h_in_edge_offsets = in_edge_offsets;
+        thrust::host_vector<int> h_eo = d_eo;
+
+        d_next_points.clear();
+        d_next_sizes.assign(next_nodes, 0);
+
+        int dst_begin = 0;
+        while (dst_begin < next_nodes) {
+            int dst_end = dst_begin + 1;
+            long long batch_candidates =
+                static_cast<long long>(h_eo[h_in_edge_offsets[dst_end]]) -
+                static_cast<long long>(h_eo[h_in_edge_offsets[dst_begin]]);
+
+            while (dst_end < next_nodes && batch_candidates < max_candidate_points_per_batch) {
+                const long long next_candidates =
+                    static_cast<long long>(h_eo[h_in_edge_offsets[dst_end + 1]]) -
+                    static_cast<long long>(h_eo[h_in_edge_offsets[dst_begin]]);
+                if (next_candidates > max_candidate_points_per_batch && batch_candidates > 0) {
+                    break;
+                }
+                ++dst_end;
+                batch_candidates = next_candidates;
+            }
+
+            if (batch_candidates <= 0) {
+                ++dst_begin;
+                continue;
+            }
+
+            const int edge_begin = h_in_edge_offsets[dst_begin];
+            const int edge_end = h_in_edge_offsets[dst_end];
+            const int batch_edges = edge_end - edge_begin;
+            const int batch_nodes = dst_end - dst_begin;
+
+            thrust::host_vector<int> h_batch_in_offsets(batch_nodes + 1, 0);
+            for (int i = 0; i <= batch_nodes; ++i) {
+                h_batch_in_offsets[i] = h_in_edge_offsets[dst_begin + i] - edge_begin;
+            }
+            thrust::device_vector<int> d_batch_in_offsets = h_batch_in_offsets;
+            thrust::device_vector<int> d_batch_edge_src(edge_src.begin() + edge_begin,
+                                                        edge_src.begin() + edge_end);
+            thrust::device_vector<ObjType> d_batch_edge_weights(edge_weights.begin() + edge_begin * NOBJS,
+                                                                edge_weights.begin() + edge_end * NOBJS);
+            thrust::device_vector<int> d_batch_ec(batch_edges, 0);
+            thrust::device_vector<int> d_batch_eo(batch_edges + 1, 0);
+
+            compute_edge_counts_kernel<<<ceil_div(batch_edges, kThreadsPerBlock), kThreadsPerBlock>>>(
+                thrust::raw_pointer_cast(d_batch_edge_src.data()),
+                thrust::raw_pointer_cast(d_prev_offsets.data()),
+                thrust::raw_pointer_cast(d_batch_ec.data()),
+                batch_edges);
+            if (!sync_kernel("batch_edge_counts", reason)) return false;
+
+            thrust::exclusive_scan(d_batch_ec.begin(), d_batch_ec.end(), d_batch_eo.begin());
+            const int batch_last_offset = d_batch_eo[batch_edges - 1];
+            const int batch_last_count = d_batch_ec[batch_edges - 1];
+            const int batch_total_cand = batch_last_offset + batch_last_count;
+            d_batch_eo[batch_edges] = batch_total_cand;
+            if (batch_total_cand <= 0) {
+                dst_begin = dst_end;
+                continue;
+            }
+
+            thrust::device_vector<ObjType> d_batch_cand(batch_total_cand * NOBJS, 0);
+            expand_candidates_points_kernel<<<ceil_div(batch_edges, kThreadsPerBlock), kThreadsPerBlock>>>(
+                thrust::raw_pointer_cast(d_batch_edge_src.data()),
+                thrust::raw_pointer_cast(d_batch_edge_weights.data()),
+                thrust::raw_pointer_cast(d_batch_eo.data()),
+                thrust::raw_pointer_cast(d_batch_ec.data()),
+                thrust::raw_pointer_cast(d_prev_offsets.data()),
+                thrust::raw_pointer_cast(d_prev_points.data()),
+                batch_edges,
+                thrust::raw_pointer_cast(d_batch_cand.data()));
+            if (!sync_kernel("batch_expand_cand", reason)) return false;
+
+            if (gpu_mem_baseline_used_bytes != NULL &&
+                gpu_mem_peak_used_bytes != NULL &&
+                gpu_mem_peak_reserved_bytes != NULL)
+            {
+                if (!sample_gpu_memory_peak(reason,
+                                            *gpu_mem_baseline_used_bytes,
+                                            gpu_mem_peak_used_bytes,
+                                            gpu_mem_peak_reserved_bytes))
+                {
+                    return false;
+                }
+            }
+
+            thrust::device_vector<int> d_batch_sizes(batch_nodes, 0);
+            thrust::device_vector<int> d_batch_blocks(batch_nodes, 0);
+            compute_dst_candidate_counts_kernel<<<ceil_div(batch_nodes, kThreadsPerBlock), kThreadsPerBlock>>>(
+                thrust::raw_pointer_cast(d_batch_in_offsets.data()),
+                thrust::raw_pointer_cast(d_batch_eo.data()),
+                batch_nodes,
+                thrust::raw_pointer_cast(d_batch_sizes.data()),
+                thrust::raw_pointer_cast(d_batch_blocks.data()));
+            if (!sync_kernel("batch_dst_counts", reason)) return false;
+
+            thrust::device_vector<int> d_batch_alive(batch_total_cand, 0);
+            thrust::device_vector<int> d_batch_next_sizes(batch_nodes, 0);
+            const int max_seg = thrust::reduce(d_batch_sizes.begin(),
+                                               d_batch_sizes.end(),
+                                               0,
+                                               thrust::maximum<int>());
+            if (max_seg > 0) {
+                thrust::device_vector<int> d_batch_block_offsets(batch_nodes + 1, 0);
+                thrust::exclusive_scan(d_batch_blocks.begin(),
+                                       d_batch_blocks.end(),
+                                       d_batch_block_offsets.begin());
+                d_batch_block_offsets[batch_nodes] =
+                    thrust::reduce(d_batch_blocks.begin(), d_batch_blocks.end(), 0);
+
+                const int total_blocks = d_batch_block_offsets[batch_nodes];
+                if (total_blocks > 0) {
+                    mark_dominated_1d_kernel<<<total_blocks, kThreadsPerBlock>>>(
+                        thrust::raw_pointer_cast(d_batch_cand.data()),
+                        thrust::raw_pointer_cast(d_batch_in_offsets.data()),
+                        thrust::raw_pointer_cast(d_batch_eo.data()),
+                        thrust::raw_pointer_cast(d_batch_block_offsets.data()),
+                        batch_nodes,
+                        thrust::raw_pointer_cast(d_batch_alive.data()),
+                        thrust::raw_pointer_cast(d_batch_next_sizes.data()));
+                    if (!sync_kernel("batch_dom_v3", reason)) return false;
+                }
+            }
+
+            thrust::device_vector<int> d_batch_alive_prefix(batch_total_cand, 0);
+            thrust::exclusive_scan(d_batch_alive.begin(),
+                                   d_batch_alive.end(),
+                                   d_batch_alive_prefix.begin());
+            const int batch_total_next = thrust::reduce(d_batch_alive.begin(), d_batch_alive.end(), 0);
+
+            thrust::device_vector<ObjType> d_batch_next_points(batch_total_next * NOBJS, 0);
+            if (batch_total_next > 0) {
+                scatter_alive_kernel<<<ceil_div(batch_total_cand, kThreadsPerBlock), kThreadsPerBlock>>>(
+                    thrust::raw_pointer_cast(d_batch_alive.data()),
+                    thrust::raw_pointer_cast(d_batch_alive_prefix.data()),
+                    thrust::raw_pointer_cast(d_batch_cand.data()),
+                    thrust::raw_pointer_cast(d_batch_next_points.data()),
+                    batch_total_cand);
+                if (!sync_kernel("batch_scatter", reason)) return false;
+
+                const size_t old_size = d_next_points.size();
+                d_next_points.resize(old_size + d_batch_next_points.size());
+                thrust::copy(d_batch_next_points.begin(),
+                             d_batch_next_points.end(),
+                             d_next_points.begin() + old_size);
+            }
+
+            thrust::copy(d_batch_next_sizes.begin(),
+                         d_batch_next_sizes.end(),
+                         d_next_sizes.begin() + dst_begin);
+
+            dst_begin = dst_end;
+        }
+
+        const int total_next = d_next_points.size() / NOBJS;
+        if (total_next_out != NULL) {
+            *total_next_out = total_next;
+        }
+        if (std_survivors_out != NULL) {
+            *std_survivors_out = population_std_from_device_counts(d_next_sizes);
+        }
+
+        thrust::exclusive_scan(d_next_sizes.begin(), d_next_sizes.end(), d_next_offsets.begin());
+        d_next_offsets[next_nodes] = total_next;
+        return true;
+    }
+
     // Expand candidate points
     thrust::device_vector<ObjType> d_cand(total_cand * NOBJS, 0);
     expand_candidates_points_kernel<<<ceil_div(num_edges, kThreadsPerBlock), kThreadsPerBlock>>>(
@@ -557,32 +742,6 @@ bool expand_layer_cuda(
         }
     }
 
-    // Segmented sort of candidates by First Objective (Descending)
-    // To do segmented sort with Thrust efficiently when we only have segment offsets 
-    // (in_edge_offsets + d_eo for final offsets), we can create a segment-ID array 
-    // and use thrust::sort_by_key or write a custom segmented sort.
-    // However, for Pareto optimization, a simple `thrust::sort_by_key` with node IDs as primary keys
-    // and Obj0 as secondary keys (descending) is very effective.
-    
-    // We already have destination node counts in d_cc. We also compute per-node block counts
-    // used by the dynamic scheduler.
-    thrust::device_vector<int> d_cc(next_nodes, 0);
-    thrust::device_vector<int> d_blocks(next_nodes, 0);
-
-    compute_dst_candidate_counts_kernel<<<ceil_div(next_nodes, kThreadsPerBlock), kThreadsPerBlock>>>(
-        thrust::raw_pointer_cast(in_edge_offsets.data()),
-        thrust::raw_pointer_cast(d_eo.data()),
-        next_nodes,
-        thrust::raw_pointer_cast(d_cc.data()),
-        thrust::raw_pointer_cast(d_blocks.data()));
-    if (!sync_kernel("dst_counts", reason)) return false;
-    if (std_candidates_out != NULL) {
-        *std_candidates_out = population_std_from_device_counts(d_cc);
-    }
-
-    // We no longer sort globally. Candidates remain exactly in the order
-    // defined by in_edge_offsets and block_offsets mapping.
-    
     thrust::device_vector<int> d_alive(total_cand, 0);
 
     const int max_seg = thrust::reduce(d_cc.begin(), d_cc.end(), 0, thrust::maximum<int>());
