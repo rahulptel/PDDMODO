@@ -18,13 +18,9 @@ bool coupled_cuda_available(std::string* reason);
 
 // Runs coupled (dynamic layer cutset) frontier enumeration on CUDA for MDDs.
 // Returns NULL on failure and fills reason when provided.
-// kernel_version:
-//   1 = one block per node
-//   2 = fixed number of blocks per node (2D grid)
-//   3 = dynamic number of blocks per node (1D grid + binary-search destination lookup)
+// CUDA uses dynamic blocks per node with binary-search destination lookup.
 ParetoFrontier* coupled_cuda_enumerate(MDD* mdd,
                                        EnumerationStats* stats,
-                                       std::string* reason,
-                                       int kernel_version = 3);
+                                       std::string* reason);
 
 #endif

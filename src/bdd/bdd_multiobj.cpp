@@ -643,9 +643,8 @@ inline bool expand_layer_bottomup_cpu_kernel3_coupled(BDD* bdd,
 
 //
 // Find pareto frontier using top-down approach on CUDA
-// kernel_version: 1=one-block-per-node, 2=fixed-2D-grid, 3=dynamic-1D-grid
 //
-ParetoFrontier* BDDMultiObj::pareto_frontier_topdown_cuda(BDD* bdd, bool maximization, const int problem_type, const int state_dominance, EnumerationStats* stats, std::string* reason, int kernel_version) {
+ParetoFrontier* BDDMultiObj::pareto_frontier_topdown_cuda(BDD* bdd, bool maximization, const int problem_type, const int state_dominance, EnumerationStats* stats, std::string* reason) {
     if (stats != NULL) {
         stats->cpu_state_dominance_s = 0.0;
         stats->dominance_filtered_total = 0;
@@ -653,15 +652,14 @@ ParetoFrontier* BDDMultiObj::pareto_frontier_topdown_cuda(BDD* bdd, bool maximiz
         reset_cpu_metrics_stats(stats);
     }
 
-    ParetoFrontier* frontier = ::topdown_cuda_enumerate(bdd, maximization, problem_type, state_dominance, stats, reason, kernel_version);
+    ParetoFrontier* frontier = ::topdown_cuda_enumerate(bdd, maximization, problem_type, state_dominance, stats, reason);
     return frontier;
 }
 
 //
 // Find pareto frontier using top-down approach on CUDA for MDD
-// kernel_version: 1=one-block-per-node, 2=fixed-2D-grid, 3=dynamic-1D-grid
 //
-ParetoFrontier* BDDMultiObj::pareto_frontier_topdown_cuda(MDD* mdd, EnumerationStats* stats, std::string* reason, int kernel_version) {
+ParetoFrontier* BDDMultiObj::pareto_frontier_topdown_cuda(MDD* mdd, EnumerationStats* stats, std::string* reason) {
     if (stats != NULL) {
         stats->cpu_state_dominance_s = 0.0;
         stats->dominance_filtered_total = 0;
@@ -669,7 +667,7 @@ ParetoFrontier* BDDMultiObj::pareto_frontier_topdown_cuda(MDD* mdd, EnumerationS
         reset_cpu_metrics_stats(stats);
     }
 
-    ParetoFrontier* frontier = ::topdown_mdd_cuda_enumerate(mdd, stats, reason, kernel_version);
+    ParetoFrontier* frontier = ::topdown_mdd_cuda_enumerate(mdd, stats, reason);
     return frontier;
 }
 
@@ -1956,9 +1954,8 @@ ParetoFrontier* BDDMultiObj::pareto_frontier_topdown(MDD* mdd, EnumerationStats*
 
 //
 // Find pareto frontier using dynamic layer cutset on CUDA (MDD)
-// kernel_version: 1=one-block-per-node, 2=fixed-2D-grid, 3=dynamic-1D-grid
 //
-ParetoFrontier* BDDMultiObj::pareto_frontier_dynamic_layer_cutset_cuda(MDD* mdd, EnumerationStats* stats, std::string* reason, int kernel_version) {
+ParetoFrontier* BDDMultiObj::pareto_frontier_dynamic_layer_cutset_cuda(MDD* mdd, EnumerationStats* stats, std::string* reason) {
     if (stats != NULL) {
         stats->cpu_state_dominance_s = 0.0;
         stats->dominance_filtered_total = 0;
@@ -1966,7 +1963,7 @@ ParetoFrontier* BDDMultiObj::pareto_frontier_dynamic_layer_cutset_cuda(MDD* mdd,
         reset_cpu_metrics_stats(stats);
     }
 
-    ParetoFrontier* frontier = ::coupled_cuda_enumerate(mdd, stats, reason, kernel_version);
+    ParetoFrontier* frontier = ::coupled_cuda_enumerate(mdd, stats, reason);
     return frontier;
 }
 

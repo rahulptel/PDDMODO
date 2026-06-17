@@ -21,14 +21,10 @@ struct BDDMultiObj {
 	static ParetoFrontier* pareto_frontier_topdown(BDD* bdd, bool maximization=true, const int problem_type=-1, const int state_dominance=0, EnumerationStats* stats = NULL, int cpu_threads = 1, int cpu_topdown_kernel = 1);
 
     // Find pareto frontier from top-down approach / CUDA
-    // kernel_version:
-    //   1 = one block per node
-    //   2 = fixed number of blocks per node (2D grid)
-    //   3 = dynamic number of blocks per node (1D grid + binary-search destination lookup)
-    static ParetoFrontier* pareto_frontier_topdown_cuda(BDD* bdd, bool maximization=true, const int problem_type=-1, const int state_dominance=0, EnumerationStats* stats = NULL, std::string* reason = NULL, int kernel_version = 3);
+    static ParetoFrontier* pareto_frontier_topdown_cuda(BDD* bdd, bool maximization=true, const int problem_type=-1, const int state_dominance=0, EnumerationStats* stats = NULL, std::string* reason = NULL);
 
     // Find pareto frontier from top-down approach / CUDA for MDD
-    static ParetoFrontier* pareto_frontier_topdown_cuda(MDD* mdd, EnumerationStats* stats = NULL, std::string* reason = NULL, int kernel_version = 3);
+    static ParetoFrontier* pareto_frontier_topdown_cuda(MDD* mdd, EnumerationStats* stats = NULL, std::string* reason = NULL);
 
     // Filter layer based on dominance / CUDA
     static void filter_dominance_cuda(BDD* bdd, const int layer, const int problem_type, const int state_dominance, EnumerationStats* stats);
@@ -61,7 +57,7 @@ struct BDDMultiObj {
     static ParetoFrontier* pareto_frontier_dynamic_layer_cutset(MDD* mdd, EnumerationStats* stats, int cpu_threads = 1, int cpu_coupled_kernel = 1);
 
     // Find pareto frontier using dynamic layer cutset / CUDA
-    static ParetoFrontier* pareto_frontier_dynamic_layer_cutset_cuda(MDD* mdd, EnumerationStats* stats = NULL, std::string* reason = NULL, int kernel_version = 3);
+    static ParetoFrontier* pareto_frontier_dynamic_layer_cutset_cuda(MDD* mdd, EnumerationStats* stats = NULL, std::string* reason = NULL);
 };
 
 

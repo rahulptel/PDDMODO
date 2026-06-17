@@ -92,7 +92,6 @@ int main(int argc, char *argv[])
     bool maximization = true;
     const int state_dominance = options.state_dominance;
     const Backend backend = options.backend;
-    const int kernel_version = options.kernel_version;
     const int cpu_threads = options.cpu_threads;
     const int cpu_kernel = options.cpu_kernel;
     const bool save_frontier = options.save_frontier;
@@ -223,7 +222,7 @@ int main(int argc, char *argv[])
         if (method == 1) { // Top-down
             if (backend == BACKEND_GPU) {
                 string cuda_reason;
-                pareto_frontier = BDDMultiObj::pareto_frontier_topdown_cuda(mdd, enumeration_stats, &cuda_reason, kernel_version);
+                pareto_frontier = BDDMultiObj::pareto_frontier_topdown_cuda(mdd, enumeration_stats, &cuda_reason);
                 if (pareto_frontier == NULL) {
                     cout << "Error - GPU backend requested but top-down enumeration failed";
                     if (!cuda_reason.empty()) cout << ": " << cuda_reason;
@@ -241,7 +240,7 @@ int main(int argc, char *argv[])
         } else if (method == 3) { // Coupled
             if (backend == BACKEND_GPU) {
                 string cuda_reason;
-                pareto_frontier = BDDMultiObj::pareto_frontier_dynamic_layer_cutset_cuda(mdd, enumeration_stats, &cuda_reason, kernel_version);
+                pareto_frontier = BDDMultiObj::pareto_frontier_dynamic_layer_cutset_cuda(mdd, enumeration_stats, &cuda_reason);
                 if (pareto_frontier == NULL) {
                     cout << "Error - GPU backend requested but coupled enumeration failed";
                     if (!cuda_reason.empty()) cout << ": " << cuda_reason;
@@ -335,7 +334,7 @@ int main(int argc, char *argv[])
         if (backend == BACKEND_GPU)
         {
             string cuda_reason;
-            pareto_frontier = BDDMultiObj::pareto_frontier_topdown_cuda(bdd, maximization, problem_type, state_dominance, enumeration_stats, &cuda_reason, kernel_version);
+            pareto_frontier = BDDMultiObj::pareto_frontier_topdown_cuda(bdd, maximization, problem_type, state_dominance, enumeration_stats, &cuda_reason);
             if (pareto_frontier == NULL)
             {
                 cout << "Error - GPU backend requested but top-down enumeration failed";
