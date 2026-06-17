@@ -89,7 +89,66 @@ Start with a conservative fixed cap, then derive it from `cudaMemGetInfo` once
 correctness is stable. The CLI can remain unchanged until benchmarking shows a
 need for tuning.
 
-## Priority 2: On-the-Fly Candidate Reconstruction
+### Launch-Overhead Caveat
+
+Small batches can trade OOM failures for excessive kernel-launch overhead. Use
+coarse destination-node slabs or edge ranges large enough to saturate the GPU,
+and only shrink the batch when `cudaMemGetInfo` indicates pressure. CUDA streams
+can overlap expansion/filtering for adjacent batches, but correctness still
+requires the per-destination merge rule above.
+
+## Priority 2: Fused Insert-and-Dominate
+
+This is the most direct way to interleave generation and elimination without
+multiple expand/filter launches.
+
+### Idea
+
+Each thread expands a parent label, computes the candidate objective vector, and
+immediately attempts to insert it into the destination node's Pareto front. The
+destination front is protected by a lightweight lock, typically an `atomicCAS`
+spin-lock per destination node.
+
+While holding the lock, the thread:
+
+1. scans existing labels for that destination
+2. discards the candidate if an existing label dominates it
+3. compacts away existing labels dominated by the candidate
+4. inserts the candidate if capacity remains
+5. releases the lock
+
+This removes the global unfiltered candidate array entirely. The only persistent
+memory is the current per-node frontier plus whatever fixed-capacity or pooled
+storage backs it.
+
+### Fit With Current Code
+
+This design would replace the current sequence:
+
+- `expand_candidates_points_kernel`
+- `mark_dominated_by_dst_dynamic_1d_kernel`
+- `scatter_alive_points_kernel`
+
+with one fused layer-transition kernel. The destination-node structure would
+need lock storage, label counts, offsets, and either fixed-capacity label
+segments or a global memory pool.
+
+The current frontier representation uses compact flat arrays plus offsets, so
+this is not a small patch. It is a separate implementation track, not a tweak to
+the v3 dynamic scheduler.
+
+### Risks
+
+- Lock contention can serialize hot destination nodes.
+- Fixed-capacity per-node buffers need overflow handling; a memory pool needs
+  deterministic failure/retry behavior.
+- Tombstone or compaction logic must preserve nondominated labels exactly.
+- Warp divergence can be high when destination frontier sizes vary widely.
+
+This is a good follow-up if batched expansion still spends too much time in
+launch orchestration or still cannot fit the largest layers.
+
+## Priority 3: On-the-Fly Candidate Reconstruction
 
 This removes the candidate-point buffer entirely.
 
@@ -129,7 +188,7 @@ Useful optimizations if this path is taken:
 - use warp-cooperative scans so lanes share reconstructed objective values
 - specialize small `NOBJS` with unrolled objective comparisons
 
-## Priority 3: Shared-Memory Pre-Filtering
+## Priority 4: Shared-Memory Pre-Filtering
 
 This is a performance optimization that can be layered on top of batching or
 on-the-fly reconstruction.
@@ -158,7 +217,7 @@ Local filtering is only a pre-filter. A point that survives inside one tile can
 still be dominated by a point from another tile. A final per-destination global
 merge is still required.
 
-## Priority 4: Warp-Cooperative Dominance
+## Priority 5: Warp-Cooperative Dominance
 
 The current dominance kernels assign one candidate to one thread and then each
 thread scans the comparison set. That is simple but creates heavy divergence and
@@ -181,7 +240,7 @@ Start with `mark_dominated_by_dst_dynamic_1d_kernel` in the BDD top-down path.
 That is the clearest bottleneck and has the fewest moving parts compared with
 the coupled cutset update.
 
-## Priority 5: Bounds Before Allocation
+## Priority 6: Bounds Before Allocation
 
 This is a cheap pruning layer if valid bounds can be computed.
 
@@ -190,6 +249,17 @@ This is a cheap pruning layer if valid bounds can be computed.
 Maintain per-layer or global incumbent bounds in device memory. Before a
 candidate is written, check whether even an optimistic continuation can avoid
 being dominated. If not, skip the candidate before it touches `d_cand_points`.
+
+The sharper version is an ideal-completion bound. For candidate
+`y_next = y_current + w(e)` at destination state `v_next`, precompute or
+maintain an optimistic vector `ideal_completion(v_next)` from that state to the
+terminal. If `y_next + ideal_completion(v_next)` is dominated by an incumbent,
+then the candidate cannot produce a final Pareto solution and can be discarded
+before allocation.
+
+Store small incumbent or bound sets in constant or read-only device memory when
+they fit. Larger state-dependent ideal vectors belong in regular device arrays
+indexed by node/layer.
 
 ### Fit With Current Code
 
@@ -226,9 +296,11 @@ it against the current dynamic scheduler.
    against CPU runs on small `data/3` instances.
 4. Benchmark peak GPU memory using existing `gpu_mem_peak_used_bytes` and
    `gpu_mem_peak_reserved_bytes` stats.
-5. If memory is still too high, prototype on-the-fly reconstruction for one
-   path, preferably BDD top-down.
-6. If memory is fixed but runtime is poor, add shared-memory pre-filtering and
+5. If launch overhead or temporary buffers remain the bottleneck, prototype the
+   fused insert-and-dominate design on one path, preferably BDD top-down.
+6. If memory is still too high but locking looks too invasive, prototype
+   on-the-fly reconstruction for one path.
+7. If memory is fixed but runtime is poor, add shared-memory pre-filtering and
    warp-cooperative dominance.
 
 ## Verification Commands
