@@ -206,6 +206,22 @@ __device__ int find_dst_node(int block_idx, const int* block_offsets, int next_n
     return low;
 }
 
+__device__ __forceinline__ bool dominates_or_tie_before(const ObjType* lhs,
+                                                        const ObjType* rhs,
+                                                        bool tie_before) {
+    bool strict = false;
+    #pragma unroll
+    for (int o = 0; o < NOBJS; ++o) {
+        const ObjType a = lhs[o];
+        const ObjType b = rhs[o];
+        if (a < b) {
+            return false;
+        }
+        strict = strict || (a > b);
+    }
+    return strict || tie_before;
+}
+
 // mark_dominated_1d_kernel uses a strictly load balanced 1D grid.
 __global__ void mark_dominated_1d_kernel(const ObjType* points,
                                          const int* in_edge_offsets,
@@ -253,13 +269,7 @@ __global__ void mark_dominated_1d_kernel(const ObjType* points,
                 const int lj = jb + jj;
 
                 if (lj == li) continue;
-                bool ge = true, strict = false;
-                #pragma unroll
-                for (int o = 0; o < NOBJS; ++o) {
-                    ge = ge && (sh[jj * NOBJS + o] >= pi[o]);
-                    strict = strict || (sh[jj * NOBJS + o] > pi[o]);
-                }
-                if (ge && (strict || (lj < li))) {
+                if (dominates_or_tie_before(&sh[jj * NOBJS], pi, lj < li)) {
                     dom = true;
                     break;
                 }
