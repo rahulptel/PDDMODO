@@ -586,23 +586,13 @@ bool expand_layer_cuda(
                 h_batch_in_offsets[i] = h_in_edge_offsets[dst_begin + i] - edge_begin;
             }
             thrust::device_vector<int> d_batch_in_offsets = h_batch_in_offsets;
-            thrust::device_vector<int> d_batch_edge_src(edge_src.begin() + edge_begin,
-                                                        edge_src.begin() + edge_end);
-            thrust::device_vector<ObjType> d_batch_edge_weights(edge_weights.begin() + edge_begin * NOBJS,
-                                                                edge_weights.begin() + edge_end * NOBJS);
-            thrust::device_vector<int> d_batch_ec(batch_edges, 0);
             thrust::device_vector<int> d_batch_eo(batch_edges + 1, 0);
 
-            compute_edge_counts_kernel<<<ceil_div(batch_edges, kThreadsPerBlock), kThreadsPerBlock>>>(
-                thrust::raw_pointer_cast(d_batch_edge_src.data()),
-                thrust::raw_pointer_cast(d_prev_offsets.data()),
-                thrust::raw_pointer_cast(d_batch_ec.data()),
-                batch_edges);
-            if (!sync_kernel("batch_edge_counts", reason)) return false;
-
-            thrust::exclusive_scan(d_batch_ec.begin(), d_batch_ec.end(), d_batch_eo.begin());
+            thrust::exclusive_scan(d_ec.begin() + edge_begin,
+                                   d_ec.begin() + edge_end,
+                                   d_batch_eo.begin());
             const int batch_last_offset = d_batch_eo[batch_edges - 1];
-            const int batch_last_count = d_batch_ec[batch_edges - 1];
+            const int batch_last_count = d_ec[edge_end - 1];
             const int batch_total_cand = batch_last_offset + batch_last_count;
             d_batch_eo[batch_edges] = batch_total_cand;
             if (batch_total_cand <= 0) {
@@ -612,10 +602,10 @@ bool expand_layer_cuda(
 
             thrust::device_vector<ObjType> d_batch_cand(batch_total_cand * NOBJS, 0);
             expand_candidates_points_kernel<<<ceil_div(batch_edges, kThreadsPerBlock), kThreadsPerBlock>>>(
-                thrust::raw_pointer_cast(d_batch_edge_src.data()),
-                thrust::raw_pointer_cast(d_batch_edge_weights.data()),
+                thrust::raw_pointer_cast(edge_src.data()) + edge_begin,
+                thrust::raw_pointer_cast(edge_weights.data()) + edge_begin * NOBJS,
                 thrust::raw_pointer_cast(d_batch_eo.data()),
-                thrust::raw_pointer_cast(d_batch_ec.data()),
+                thrust::raw_pointer_cast(d_ec.data()) + edge_begin,
                 thrust::raw_pointer_cast(d_prev_offsets.data()),
                 thrust::raw_pointer_cast(d_prev_points.data()),
                 batch_edges,
