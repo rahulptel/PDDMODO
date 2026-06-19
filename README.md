@@ -45,6 +45,16 @@ The available enumeration methods are:
 - `2`: bottom-up BFS frontier propagation.
 - `3`: dynamic layer cutset coupling.
 
+CUDA enumeration code is split by operation:
+
+- `src/cuda/enum.cu`: public CUDA wrapper entry points and device setup.
+- `src/cuda/topdown.cu`: BDD and MDD top-down frontier expansion.
+- `src/cuda/bottomup.cu`: shared MDD layer expansion and expansion scoring.
+- `src/cuda/couple.cu`: MDD cutset product generation, merge, and cleanup.
+- `src/cuda/enum_types.cuh` and `src/cuda/dominance_utils.cuh`: shared CUDA
+  types and small device helpers.
+- `src/cuda/cuda_stubs.cpp`: CPU-only build stubs when `ENABLE_CUDA=0`.
+
 ## Build
 
 Builds are controlled by the root `makefile`. The important options are:
