@@ -35,46 +35,7 @@ namespace {
 constexpr int kThreadsPerBlock = 128;
 constexpr int kWarpSize = 32;
 
-inline bool set_reason(std::string* reason, const std::string& message) {
-    if (reason != NULL) *reason = message;
-    return false;
-}
 
-inline bool cuda_ok(cudaError_t err, const char* where, std::string* reason) {
-    if (err == cudaSuccess) return true;
-    std::string msg = std::string(where) + ": " + cudaGetErrorString(err);
-    return set_reason(reason, msg);
-}
-
-inline bool sync_kernel(const char* where, std::string* reason) {
-    if (!cuda_ok(cudaGetLastError(), where, reason)) return false;
-    return cuda_ok(cudaDeviceSynchronize(), where, reason);
-}
-
-inline bool sample_gpu_memory_peak(std::string* reason,
-                                   const long long baseline_used_bytes,
-                                   long long* peak_used_bytes,
-                                   long long* peak_reserved_bytes) {
-    size_t free_bytes = 0;
-    size_t total_bytes = 0;
-    if (!cuda_ok(cudaMemGetInfo(&free_bytes, &total_bytes), "cudaMemGetInfo", reason)) {
-        return false;
-    }
-
-    const long long used_bytes = static_cast<long long>(total_bytes) - static_cast<long long>(free_bytes);
-    if (peak_reserved_bytes != NULL && used_bytes > *peak_reserved_bytes) {
-        *peak_reserved_bytes = used_bytes;
-    }
-
-    long long delta_used_bytes = used_bytes - baseline_used_bytes;
-    if (delta_used_bytes < 0) {
-        delta_used_bytes = 0;
-    }
-    if (peak_used_bytes != NULL && delta_used_bytes > *peak_used_bytes) {
-        *peak_used_bytes = delta_used_bytes;
-    }
-    return true;
-}
 
 __host__ __device__ inline int ceil_div(int a, int b) { return (a + b - 1) / b; }
 
@@ -620,3 +581,41 @@ int compute_expansion_score(const thrust::device_vector<int>& offsets,
 
 // ---------------------------------------------------------------
 // Layer expansion API
+// ---------------------------------------------------------------
+
+bool bottomup_expand_mdd_layer(
+    const PackedMDDLayer& packed_layer,
+    const thrust::device_vector<int>& d_prev_offsets,
+    const thrust::device_vector<ObjType>& d_prev_points,
+    thrust::device_vector<int>& d_next_sizes,
+    thrust::device_vector<int>& d_next_offsets,
+    thrust::device_vector<ObjType>& d_next_points,
+    std::string* reason,
+    long long* total_candidates_out,
+    long long* total_next_out,
+    double* std_candidates_out,
+    double* std_survivors_out,
+    long long* gpu_mem_baseline_used_bytes,
+    long long* gpu_mem_peak_used_bytes,
+    long long* gpu_mem_peak_reserved_bytes) {
+
+    return expand_layer_frontiers(
+        packed_layer.bu_in_edge_offsets,
+        packed_layer.bu_edge_src,
+        packed_layer.bu_edge_weights,
+        packed_layer.bu_num_edges,
+        packed_layer.num_nodes,
+        d_prev_offsets,
+        d_prev_points,
+        d_next_sizes,
+        d_next_offsets,
+        d_next_points,
+        reason,
+        total_candidates_out,
+        total_next_out,
+        std_candidates_out,
+        std_survivors_out,
+        gpu_mem_baseline_used_bytes,
+        gpu_mem_peak_used_bytes,
+        gpu_mem_peak_reserved_bytes);
+}

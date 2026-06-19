@@ -58,67 +58,7 @@ struct PackedBDDLayer {
     thrust::device_vector<int> single_parent_arc;
 };
 
-inline bool set_reason(std::string* reason, const std::string& message) {
-    if (reason != NULL) {
-        *reason = message;
-    }
-    return false;
-}
 
-inline bool cuda_ok(cudaError_t err, const char* where, std::string* reason) {
-    if (err == cudaSuccess) {
-        return true;
-    }
-    std::string msg = where;
-    msg += ": ";
-    msg += cudaGetErrorString(err);
-    return set_reason(reason, msg);
-}
-
-inline bool sync_kernel(const char* where, std::string* reason) {
-    if (!cuda_ok(cudaGetLastError(), where, reason)) {
-        return false;
-    }
-    return cuda_ok(cudaDeviceSynchronize(), where, reason);
-}
-
-inline bool capture_gpu_memory_used(std::string* reason, long long* used_bytes_out) {
-    if (used_bytes_out == NULL) {
-        return set_reason(reason, "capture_gpu_memory_used: output pointer is NULL");
-    }
-    size_t free_bytes = 0;
-    size_t total_bytes = 0;
-    if (!cuda_ok(cudaMemGetInfo(&free_bytes, &total_bytes), "cudaMemGetInfo", reason)) {
-        return false;
-    }
-    *used_bytes_out = static_cast<long long>(total_bytes) - static_cast<long long>(free_bytes);
-    return true;
-}
-
-inline bool sample_gpu_memory_peak(std::string* reason,
-                                   const long long baseline_used_bytes,
-                                   long long* peak_used_bytes,
-                                   long long* peak_reserved_bytes) {
-    size_t free_bytes = 0;
-    size_t total_bytes = 0;
-    if (!cuda_ok(cudaMemGetInfo(&free_bytes, &total_bytes), "cudaMemGetInfo", reason)) {
-        return false;
-    }
-
-    const long long used_bytes = static_cast<long long>(total_bytes) - static_cast<long long>(free_bytes);
-    if (peak_reserved_bytes != NULL && used_bytes > *peak_reserved_bytes) {
-        *peak_reserved_bytes = used_bytes;
-    }
-
-    long long delta_used_bytes = used_bytes - baseline_used_bytes;
-    if (delta_used_bytes < 0) {
-        delta_used_bytes = 0;
-    }
-    if (peak_used_bytes != NULL && delta_used_bytes > *peak_used_bytes) {
-        *peak_used_bytes = delta_used_bytes;
-    }
-    return true;
-}
 
 struct SquareToDoubleInt {
     __host__ __device__ double operator()(const int x) const {
@@ -155,63 +95,7 @@ inline double population_std_from_device_counts(const thrust::device_vector<int>
     return population_std_from_sums(static_cast<double>(sum_ll), sum_sq, count);
 }
 
-class ScopedCudaEventTimer {
-public:
-    ScopedCudaEventTimer(const char* where, std::string* reason)
-        : start_(NULL), stop_(NULL), active_(false), reason_(reason) {
-        if (!cuda_ok(cudaEventCreate(&start_), where, reason_)) {
-            return;
-        }
-        if (!cuda_ok(cudaEventCreate(&stop_), where, reason_)) {
-            return;
-        }
-        if (!cuda_ok(cudaEventRecord(start_), where, reason_)) {
-            return;
-        }
-        active_ = true;
-    }
 
-    bool ok() const { return active_; }
-
-    bool finish_and_add(double* seconds_out, const char* where) {
-        if (!active_) {
-            return false;
-        }
-        if (!cuda_ok(cudaEventRecord(stop_), where, reason_)) {
-            active_ = false;
-            return false;
-        }
-        if (!cuda_ok(cudaEventSynchronize(stop_), where, reason_)) {
-            active_ = false;
-            return false;
-        }
-        float milliseconds = 0.0f;
-        if (!cuda_ok(cudaEventElapsedTime(&milliseconds, start_, stop_), where, reason_)) {
-            active_ = false;
-            return false;
-        }
-        if (seconds_out != NULL) {
-            *seconds_out += static_cast<double>(milliseconds) / 1000.0;
-        }
-        active_ = false;
-        return true;
-    }
-
-    ~ScopedCudaEventTimer() {
-        if (start_ != NULL) {
-            cudaEventDestroy(start_);
-        }
-        if (stop_ != NULL) {
-            cudaEventDestroy(stop_);
-        }
-    }
-
-private:
-    cudaEvent_t start_;
-    cudaEvent_t stop_;
-    bool active_;
-    std::string* reason_;
-};
 
 inline bool fail_layer_filter(LayerDominanceContext* ctx, const std::string& message) {
     if (ctx != NULL) {
@@ -1251,161 +1135,42 @@ ParetoFrontier* enumerate_bdd_topdown(BDD* bdd,
 }
 
 // ---------------------------------------------------------------
-// MDD GPU Top-Down Enumeration
+// MDD GPU Top-Down Layer Expansion Wrapper
 // ---------------------------------------------------------------
 
-ParetoFrontier* enumerate_mdd_topdown(MDD* mdd,
-                                           EnumerationStats* stats,
-                                           std::string* reason) {
-    if (mdd == NULL) { set_reason(reason, "MDD is NULL"); return NULL; }
-    if (mdd->num_layers <= 0) { set_reason(reason, "MDD has zero layers"); return NULL; }
-    long long gpu_mem_baseline_used_bytes = 0;
-    long long gpu_mem_peak_used_bytes = 0;
-    long long gpu_mem_peak_reserved_bytes = 0;
-    if (stats != NULL) {
-        if (!capture_gpu_memory_used(reason, &gpu_mem_baseline_used_bytes)) return NULL;
-        gpu_mem_peak_reserved_bytes = gpu_mem_baseline_used_bytes;
-        stats->std_candidates_per_layer.assign(mdd->num_layers, 0.0);
-        stats->std_frontier_survivors_per_layer.assign(mdd->num_layers, 0.0);
-    }
+bool topdown_expand_mdd_layer(
+    const PackedMDDLayer& packed_layer,
+    const thrust::device_vector<int>& d_prev_offsets,
+    const thrust::device_vector<ObjType>& d_prev_points,
+    thrust::device_vector<int>& d_next_sizes,
+    thrust::device_vector<int>& d_next_offsets,
+    thrust::device_vector<ObjType>& d_next_points,
+    std::string* reason,
+    long long* total_candidates_out,
+    long long* total_next_out,
+    double* std_candidates_out,
+    double* std_survivors_out,
+    long long* gpu_mem_baseline_used_bytes,
+    long long* gpu_mem_peak_used_bytes,
+    long long* gpu_mem_peak_reserved_bytes) {
 
-    const int num_layers = mdd->num_layers;
-    clock_t t0, t1;
-
-    // 1. Pack top-down layers
-    const auto pack_begin = std::chrono::steady_clock::now();
-    t0 = clock();
-    std::vector<PackedMDDLayer> packed(num_layers);
-    for (int l = 0; l < num_layers; ++l) {
-        const int num_nodes = mdd->layers[l].size();
-        packed[l].num_nodes = num_nodes;
-
-        if (l > 0) {
-            std::vector<int> h_off(num_nodes + 1, 0);
-            for (int d = 0; d < num_nodes; ++d)
-                h_off[d + 1] = h_off[d] + mdd->layers[l][d]->in_arcs_list.size();
-            const int num_edges = h_off[num_nodes];
-            std::vector<int> h_src(num_edges);
-            std::vector<ObjType> h_wt(num_edges * NOBJS);
-            int idx = 0;
-            for (int d = 0; d < num_nodes; ++d) {
-                for (MDDArc* a : mdd->layers[l][d]->in_arcs_list) {
-                    h_src[idx] = a->tail->index;
-                    for (int o = 0; o < NOBJS; ++o)
-                        h_wt[idx * NOBJS + o] = a->weights[o];
-                    ++idx;
-                }
-            }
-            packed[l].td_num_edges = num_edges;
-            packed[l].td_in_edge_offsets = h_off;
-            packed[l].td_edge_src = h_src;
-            packed[l].td_edge_weights = h_wt;
-        } else {
-            packed[l].td_num_edges = 0;
-        }
-    }
-    t1 = clock();
-    if (stats != NULL) {
-        stats->wall_pack_transfer_s += std::chrono::duration_cast<std::chrono::duration<double> >(std::chrono::steady_clock::now() - pack_begin).count();
-        if (!sample_gpu_memory_peak(reason, gpu_mem_baseline_used_bytes, &gpu_mem_peak_used_bytes, &gpu_mem_peak_reserved_bytes)) return NULL;
-    }
-
-    // 2. Initialize frontier at root
-    const int root_nodes = packed[0].num_nodes;
-    const int root_idx = mdd->get_root()->index;
-
-    thrust::host_vector<int> h_td_sizes(root_nodes, 0);
-    h_td_sizes[root_idx] = 1;
-    thrust::device_vector<int> d_td_sizes = h_td_sizes;
-    thrust::device_vector<int> d_td_offsets(root_nodes + 1, 0);
-    thrust::exclusive_scan(d_td_sizes.begin(), d_td_sizes.end(), d_td_offsets.begin());
-    d_td_offsets[root_nodes] = 1;
-    thrust::device_vector<ObjType> d_td_points(NOBJS, 0); // single point (0,0...)
-
-    // 3. Expand layer by layer
-    for (int l = 1; l < num_layers; ++l) {
-        const int num_nodes = packed[l].num_nodes;
-        thrust::device_vector<int> next_sizes, next_offsets;
-        thrust::device_vector<ObjType> next_points;
-        long long layer_candidates = 0;
-        long long layer_survivors = 0;
-        double layer_candidates_std = 0.0;
-        double layer_survivors_std = 0.0;
-
-        ScopedCudaEventTimer layer_expand_timer("cudaEventCreate/expand_layer_frontiers", reason);
-        if (!layer_expand_timer.ok()) {
-            return NULL;
-        }
-        t0 = clock();
-        if (!expand_layer_frontiers(
-                    packed[l].td_in_edge_offsets,
-                    packed[l].td_edge_src,
-                    packed[l].td_edge_weights,
-                    packed[l].td_num_edges,
-                    num_nodes,
-                    d_td_offsets, d_td_points,
-                    next_sizes, next_offsets, next_points, reason,
-                    &layer_candidates, &layer_survivors,
-                    &layer_candidates_std, &layer_survivors_std,
-                    stats != NULL ? &gpu_mem_baseline_used_bytes : NULL,
-                    stats != NULL ? &gpu_mem_peak_used_bytes : NULL,
-                    stats != NULL ? &gpu_mem_peak_reserved_bytes : NULL)) {
-            return NULL;
-        }
-        if (!layer_expand_timer.finish_and_add(stats != NULL ? &stats->kernel_expand_td_s : NULL,
-                                               "cudaEventElapsedTime/expand_layer_frontiers")) {
-            return NULL;
-        }
-        t1 = clock();
-        if (stats != NULL) {
-            stats->work_candidates_total += layer_candidates;
-            stats->work_candidates_peak = std::max(stats->work_candidates_peak, layer_candidates);
-            stats->work_frontier_survivors_total += layer_survivors;
-            stats->work_frontier_peak_points = std::max(stats->work_frontier_peak_points, layer_survivors);
-            stats->std_candidates_per_layer[l] = layer_candidates_std;
-            stats->std_frontier_survivors_per_layer[l] = layer_survivors_std;
-            if (!sample_gpu_memory_peak(reason, gpu_mem_baseline_used_bytes, &gpu_mem_peak_used_bytes, &gpu_mem_peak_reserved_bytes)) return NULL;
-        }
-
-        d_td_sizes.swap(next_sizes);
-        d_td_offsets.swap(next_offsets);
-        d_td_points.swap(next_points);
-    }
-
-    // 4. Extract points from terminal node
-    const int term_idx = mdd->get_terminal()->index;
-    const int term_nodes = packed[num_layers - 1].num_nodes;
-    
-    thrust::host_vector<int> h_offsets = d_td_offsets;
-    if (term_idx < 0 || term_idx >= term_nodes) {
-        set_reason(reason, "Invalid terminal index");
-        return NULL;
-    }
-
-    const int begin = h_offsets[term_idx];
-    const int end = h_offsets[term_idx + 1];
-    const int num_points = std::max(0, end - begin);
-
-    ParetoFrontier* frontier = new ParetoFrontier;
-    frontier->sols.resize(num_points * NOBJS, 0);
-    if (num_points > 0) {
-        thrust::host_vector<ObjType> h_points = d_td_points;
-        std::copy(h_points.begin() + begin * NOBJS,
-                  h_points.begin() + end * NOBJS,
-                  frontier->sols.begin());
-    }
-
-    // Optional: we can apply a final sort/dominance filter here if we expect duplicate equivalent paths, 
-    // but the node dominance filter inside `expand_layer_frontiers` handles standard local state dominance.
-
-    if (reason != NULL) reason->clear();
-    if (stats != NULL) {
-        if (!sample_gpu_memory_peak(reason, gpu_mem_baseline_used_bytes, &gpu_mem_peak_used_bytes, &gpu_mem_peak_reserved_bytes)) {
-            return NULL;
-        }
-        stats->gpu_mem_peak_used_bytes = gpu_mem_peak_used_bytes;
-        stats->gpu_mem_peak_reserved_bytes = gpu_mem_peak_reserved_bytes;
-        stats->kernel_total_s = stats->kernel_expand_td_s + stats->kernel_dominance_s;
-    }
-    return frontier;
+    return expand_layer_frontiers(
+        packed_layer.td_in_edge_offsets,
+        packed_layer.td_edge_src,
+        packed_layer.td_edge_weights,
+        packed_layer.td_num_edges,
+        packed_layer.num_nodes,
+        d_prev_offsets,
+        d_prev_points,
+        d_next_sizes,
+        d_next_offsets,
+        d_next_points,
+        reason,
+        total_candidates_out,
+        total_next_out,
+        std_candidates_out,
+        std_survivors_out,
+        gpu_mem_baseline_used_bytes,
+        gpu_mem_peak_used_bytes,
+        gpu_mem_peak_reserved_bytes);
 }

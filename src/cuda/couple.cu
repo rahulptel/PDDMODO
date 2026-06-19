@@ -36,21 +36,7 @@ constexpr int kThreadsPerBlock = 128;
 
 __host__ __device__ inline int ceil_div(int a, int b) { return (a + b - 1) / b; }
 
-inline bool set_reason(std::string* reason, const std::string& message) {
-    if (reason != NULL) *reason = message;
-    return false;
-}
 
-inline bool cuda_ok(cudaError_t err, const char* where, std::string* reason) {
-    if (err == cudaSuccess) return true;
-    std::string msg = std::string(where) + ": " + cudaGetErrorString(err);
-    return set_reason(reason, msg);
-}
-
-inline bool sync_kernel(const char* where, std::string* reason) {
-    if (!cuda_ok(cudaGetLastError(), where, reason)) return false;
-    return cuda_ok(cudaDeviceSynchronize(), where, reason);
-}
 
 
 struct HasBothFrontiers {
@@ -256,219 +242,17 @@ __global__ void mark_frontier_dominated_by_batch_kernel(
 // Works identically for top-down and bottom-up.
 // ---------------------------------------------------------------
 
-ParetoFrontier* enumerate_mdd_coupled(MDD* mdd,
-                                       EnumerationStats* stats,
-                                       std::string* reason) {
-    if (mdd == NULL) { set_reason(reason, "MDD is NULL"); return NULL; }
-    if (mdd->num_layers <= 0) { set_reason(reason, "MDD has zero layers"); return NULL; }
-    if (stats != NULL) {
-        stats->std_candidates_per_layer.clear();
-        stats->std_frontier_survivors_per_layer.clear();
-    }
+ParetoFrontier* couple_mdd_cutsets(
+    const PackedMDDLayer& packed_layer,
+    const thrust::device_vector<int>& d_td_offsets,
+    const thrust::device_vector<ObjType>& d_td_points,
+    const thrust::device_vector<int>& d_bu_offsets,
+    const thrust::device_vector<ObjType>& d_bu_points,
+    EnumerationStats* stats,
+    std::string* reason) {
 
-    const int num_layers = mdd->num_layers;
-    clock_t t0, t1;
-
-    // ----------------------------------------------------------
-    // 1. Pack all MDD layers into flat GPU arrays
-    // ----------------------------------------------------------
-    const auto pack_begin = std::chrono::steady_clock::now();
-    t0 = clock();
-    std::vector<PackedMDDLayer> packed(num_layers);
-    for (int l = 0; l < num_layers; ++l) {
-        const int num_nodes = mdd->layers[l].size();
-        packed[l].num_nodes = num_nodes;
-
-        // --- top-down: incoming arcs (for layers 1..num_layers-1) ---
-        if (l > 0) {
-            std::vector<int> h_off(num_nodes + 1, 0);
-            for (int d = 0; d < num_nodes; ++d)
-                h_off[d + 1] = h_off[d] + mdd->layers[l][d]->in_arcs_list.size();
-            const int num_edges = h_off[num_nodes];
-            std::vector<int> h_src(num_edges);
-            std::vector<ObjType> h_wt(num_edges * NOBJS);
-            int idx = 0;
-            for (int d = 0; d < num_nodes; ++d) {
-                for (MDDArc* a : mdd->layers[l][d]->in_arcs_list) {
-                    h_src[idx] = a->tail->index;
-                    for (int o = 0; o < NOBJS; ++o)
-                        h_wt[idx * NOBJS + o] = a->weights[o];
-                    ++idx;
-                }
-            }
-            packed[l].td_num_edges = num_edges;
-            packed[l].td_in_edge_offsets = h_off;
-            packed[l].td_edge_src = h_src;
-            packed[l].td_edge_weights = h_wt;
-        } else {
-            packed[l].td_num_edges = 0;
-        }
-
-        // --- bottom-up: outgoing arcs (for layers 0..num_layers-2) ---
-        if (l < num_layers - 1) {
-            std::vector<int> h_off(num_nodes + 1, 0);
-            for (int d = 0; d < num_nodes; ++d)
-                h_off[d + 1] = h_off[d] + mdd->layers[l][d]->out_arcs_list.size();
-            const int num_edges = h_off[num_nodes];
-            std::vector<int> h_src(num_edges);
-            std::vector<ObjType> h_wt(num_edges * NOBJS);
-            int idx = 0;
-            for (int d = 0; d < num_nodes; ++d) {
-                for (MDDArc* a : mdd->layers[l][d]->out_arcs_list) {
-                    h_src[idx] = a->head->index;
-                    for (int o = 0; o < NOBJS; ++o)
-                        h_wt[idx * NOBJS + o] = a->weights[o];
-                    ++idx;
-                }
-            }
-            packed[l].bu_num_edges = num_edges;
-            packed[l].bu_in_edge_offsets = h_off;
-            packed[l].bu_edge_src = h_src;
-            packed[l].bu_edge_weights = h_wt;
-        } else {
-            packed[l].bu_num_edges = 0;
-        }
-
-        // --- arc counts for heuristic ---
-        std::vector<int> h_out(num_nodes), h_in(num_nodes);
-        for (int d = 0; d < num_nodes; ++d) {
-            h_out[d] = mdd->layers[l][d]->out_arcs_list.size();
-            h_in[d] = mdd->layers[l][d]->in_arcs_list.size();
-        }
-        packed[l].out_arc_counts = h_out;
-        packed[l].in_arc_counts = h_in;
-    }
-    t1 = clock();
-    if (stats != NULL) {
-        stats->wall_pack_transfer_s += std::chrono::duration_cast<std::chrono::duration<double> >(std::chrono::steady_clock::now() - pack_begin).count();
-    }
-
-    // ----------------------------------------------------------
-    // 2. Initialize top-down and bottom-up frontiers
-    // ----------------------------------------------------------
-    const int root_nodes = packed[0].num_nodes;
-    const int root_idx = mdd->get_root()->index;
-
-    thrust::host_vector<int> h_td_sizes(root_nodes, 0);
-    h_td_sizes[root_idx] = 1;
-    thrust::device_vector<int> d_td_sizes = h_td_sizes;
-    thrust::device_vector<int> d_td_offsets(root_nodes + 1, 0);
-    thrust::exclusive_scan(d_td_sizes.begin(), d_td_sizes.end(), d_td_offsets.begin());
-    d_td_offsets[root_nodes] = 1;
-    thrust::device_vector<ObjType> d_td_points(NOBJS, 0);
-
-    const int term_layer = num_layers - 1;
-    const int term_nodes = packed[term_layer].num_nodes;
-    const int term_idx = mdd->get_terminal()->index;
-
-    thrust::host_vector<int> h_bu_sizes(term_nodes, 0);
-    h_bu_sizes[term_idx] = 1;
-    thrust::device_vector<int> d_bu_sizes = h_bu_sizes;
-    thrust::device_vector<int> d_bu_offsets(term_nodes + 1, 0);
-    thrust::exclusive_scan(d_bu_sizes.begin(), d_bu_sizes.end(), d_bu_offsets.begin());
-    d_bu_offsets[term_nodes] = 1;
-    thrust::device_vector<ObjType> d_bu_points(NOBJS, 0);
-
-    // ----------------------------------------------------------
-    // 3. Dynamic layer selection loop (all data stays on GPU)
-    // ----------------------------------------------------------
-    int layer_td = 0;
-    int layer_bu = num_layers - 1;
-    int topdown_score = 0;
-    int bottomup_score = 0;
-
-    double total_td_time = 0.0, total_bu_time = 0.0;
-    int td_iters = 0, bu_iters = 0;
-
-    while (layer_td != layer_bu) {
-        if (topdown_score <= bottomup_score) {
-            // Expand top-down
-            ++layer_td;
-            const int num_nodes = packed[layer_td].num_nodes;
-            thrust::device_vector<int> next_sizes, next_offsets;
-            thrust::device_vector<ObjType> next_points;
-            long long layer_candidates = 0;
-            long long layer_survivors = 0;
-
-            t0 = clock();
-            if (!expand_layer_frontiers(
-                    packed[layer_td].td_in_edge_offsets,
-                    packed[layer_td].td_edge_src,
-                    packed[layer_td].td_edge_weights,
-                    packed[layer_td].td_num_edges,
-                    num_nodes,
-                    d_td_offsets, d_td_points,
-                    next_sizes, next_offsets, next_points, reason,
-                    &layer_candidates, &layer_survivors,
-                    NULL, NULL,
-                    NULL, NULL, NULL))
-                return NULL;
-            t1 = clock();
-            double td_elapsed = (double)(t1-t0)/CLOCKS_PER_SEC;
-            total_td_time += td_elapsed;
-            ++td_iters;
-            if (stats != NULL) {
-                stats->work_candidates_total += layer_candidates;
-                stats->work_candidates_peak = std::max(stats->work_candidates_peak, layer_candidates);
-                stats->work_frontier_survivors_total += layer_survivors;
-                stats->work_frontier_peak_points = std::max(stats->work_frontier_peak_points, layer_survivors);
-            }
-
-            d_td_sizes.swap(next_sizes);
-            d_td_offsets.swap(next_offsets);
-            d_td_points.swap(next_points);
-
-            // Compute layer value on GPU
-            topdown_score = compute_expansion_score(d_td_offsets, packed[layer_td].out_arc_counts, num_nodes);
-        } else {
-            // Expand bottom-up
-            --layer_bu;
-            const int num_nodes = packed[layer_bu].num_nodes;
-            thrust::device_vector<int> next_sizes, next_offsets;
-            thrust::device_vector<ObjType> next_points;
-            long long layer_candidates = 0;
-            long long layer_survivors = 0;
-
-            t0 = clock();
-            if (!expand_layer_frontiers(
-                    packed[layer_bu].bu_in_edge_offsets,
-                    packed[layer_bu].bu_edge_src,
-                    packed[layer_bu].bu_edge_weights,
-                    packed[layer_bu].bu_num_edges,
-                    num_nodes,
-                    d_bu_offsets, d_bu_points,
-                    next_sizes, next_offsets, next_points, reason,
-                    &layer_candidates, &layer_survivors,
-                    NULL, NULL,
-                    NULL, NULL, NULL))
-                return NULL;
-            t1 = clock();
-            double bu_elapsed = (double)(t1-t0)/CLOCKS_PER_SEC;
-            total_bu_time += bu_elapsed;
-            ++bu_iters;
-            if (stats != NULL) {
-                stats->work_candidates_total += layer_candidates;
-                stats->work_candidates_peak = std::max(stats->work_candidates_peak, layer_candidates);
-                stats->work_frontier_survivors_total += layer_survivors;
-                stats->work_frontier_peak_points = std::max(stats->work_frontier_peak_points, layer_survivors);
-            }
-
-            d_bu_sizes.swap(next_sizes);
-            d_bu_offsets.swap(next_offsets);
-            d_bu_points.swap(next_points);
-
-            // Compute layer value on GPU (with 1.5x multiplier)
-            bottomup_score = 1.5 * compute_expansion_score(d_bu_offsets, packed[layer_bu].in_arc_counts, num_nodes);
-        }
-    }
-
-    if (stats != NULL) stats->layer_coupling = layer_td;
-
-    // ----------------------------------------------------------
-    // 4. Cutset convolution: fully GPU-based batched pipeline
-    // ----------------------------------------------------------
-    t0 = clock();
-    const int cutset_nodes = packed[layer_td].num_nodes;
+    clock_t t0 = clock();
+    const int cutset_nodes = packed_layer.num_nodes;
 
     thrust::host_vector<int> h_td_off = d_td_offsets;
     thrust::host_vector<int> h_bu_off = d_bu_offsets;
@@ -655,7 +439,7 @@ ParetoFrontier* enumerate_mdd_coupled(MDD* mdd,
         ++num_batches;
         batch_begin = batch_end;
     }
-    t1 = clock();
+    clock_t t1 = clock();
     if (stats != NULL) {
         stats->wall_join_s += (double)(t1-t0)/CLOCKS_PER_SEC;
     }
