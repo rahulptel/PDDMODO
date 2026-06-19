@@ -1967,6 +1967,21 @@ ParetoFrontier* BDDMultiObj::pareto_frontier_dynamic_layer_cutset_cuda(MDD* mdd,
     return frontier;
 }
 
+//
+// Find pareto frontier using dynamic layer cutset on CUDA (BDD)
+//
+ParetoFrontier* BDDMultiObj::pareto_frontier_dynamic_layer_cutset_cuda(BDD* bdd, bool maximization, const int problem_type, const int state_dominance, EnumerationStats* stats, std::string* reason) {
+    if (stats != NULL) {
+        stats->cpu_state_dominance_s = 0.0;
+        stats->dominance_filtered_total = 0;
+        stats->layer_coupling = 0;
+        reset_cpu_metrics_stats(stats);
+    }
+
+    ParetoFrontier* frontier = ::coupled_cuda_enumerate(bdd, maximization, problem_type, state_dominance, stats, reason);
+    return frontier;
+}
+
 
 //
 // Find pareto frontier using dynamic layer cutset

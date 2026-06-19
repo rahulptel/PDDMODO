@@ -49,14 +49,6 @@ struct LayerDominanceContext {
 
 thread_local LayerDominanceContext* g_layer_dom_ctx = NULL;
 
-struct PackedBDDLayer {
-    thrust::device_vector<int> in_edge_offsets;
-    thrust::device_vector<int> edge_src;
-    thrust::device_vector<ObjType> edge_weights;
-    thrust::device_vector<int> min_weight;
-    thrust::device_vector<int> single_parent_id;
-    thrust::device_vector<int> single_parent_arc;
-};
 
 
 
@@ -600,6 +592,7 @@ ParetoFrontier* enumerate_bdd_topdown(BDD* bdd,
     long long gpu_mem_baseline_used_bytes = 0;
     long long gpu_mem_peak_used_bytes = 0;
     long long gpu_mem_peak_reserved_bytes = 0;
+    const bool pack_knapsack_meta = (problem_type == 1 && state_dominance > 0);
     if (stats != NULL) {
         if (!capture_gpu_memory_used(reason, &gpu_mem_baseline_used_bytes)) {
             return NULL;
@@ -617,92 +610,8 @@ ParetoFrontier* enumerate_bdd_topdown(BDD* bdd,
     }
 
     std::vector<PackedBDDLayer> packed_layers;
-    packed_layers.resize(bdd->num_layers);
-
-    const int first_arc_type = maximization ? 1 : 0;
-    const int second_arc_type = maximization ? 0 : 1;
-    const bool pack_knapsack_meta = (problem_type == 1 && state_dominance > 0);
     const auto pack_begin = std::chrono::steady_clock::now();
-
-    for (int l = 1; l < bdd->num_layers; ++l) {
-        const int next_nodes = bdd->layers[l].size();
-        std::vector<int> h_in_offsets(next_nodes + 1, 0);
-
-        for (int dst_idx = 0; dst_idx < next_nodes; ++dst_idx) {
-            Node* dst_node = bdd->layers[l][dst_idx];
-            int count = 0;
-            const int arc_order[2] = {first_arc_type, second_arc_type};
-            for (int arc_pos = 0; arc_pos < 2; ++arc_pos) {
-                count += dst_node->prev[arc_order[arc_pos]].size();
-            }
-            h_in_offsets[dst_idx + 1] = h_in_offsets[dst_idx] + count;
-        }
-
-        const int num_edges = h_in_offsets[next_nodes];
-        std::vector<int> h_edge_src;
-        std::vector<ObjType> h_edge_weights;
-        h_edge_src.reserve(num_edges);
-        h_edge_weights.reserve(static_cast<size_t>(num_edges) * NOBJS);
-
-        std::vector<int> h_min_weight;
-        std::vector<int> h_parent_id;
-        std::vector<int> h_parent_arc;
-        if (pack_knapsack_meta) {
-            h_min_weight.resize(next_nodes);
-            h_parent_id.resize(next_nodes);
-            h_parent_arc.resize(next_nodes);
-        }
-
-        const int arc_order[2] = {first_arc_type, second_arc_type};
-        for (int dst_idx = 0; dst_idx < next_nodes; ++dst_idx) {
-            Node* dst_node = bdd->layers[l][dst_idx];
-            for (int arc_pos = 0; arc_pos < 2; ++arc_pos) {
-                const int arc_type = arc_order[arc_pos];
-                for (std::vector<Node*>::iterator it = dst_node->prev[arc_type].begin();
-                     it != dst_node->prev[arc_type].end(); ++it) {
-                    Node* src_node = *it;
-                    h_edge_src.push_back(src_node->index);
-
-                    ObjType* w = src_node->weights[arc_type];
-                    for (int o = 0; o < NOBJS; ++o) {
-                        h_edge_weights.push_back(w != NULL ? w[o] : 0);
-                    }
-                }
-            }
-
-            if (pack_knapsack_meta) {
-                h_min_weight[dst_idx] = dst_node->min_weight;
-                const int parents_total = dst_node->prev[0].size() + dst_node->prev[1].size();
-                if (parents_total == 1) {
-                    if (dst_node->prev[0].size() == 1) {
-                        h_parent_id[dst_idx] = dst_node->prev[0][0]->index;
-                        h_parent_arc[dst_idx] = 0;
-                    } else {
-                        h_parent_id[dst_idx] = dst_node->prev[1][0]->index;
-                        h_parent_arc[dst_idx] = 1;
-                    }
-                } else {
-                    h_parent_id[dst_idx] = -1;
-                    h_parent_arc[dst_idx] = -1;
-                }
-            }
-        }
-
-        if (static_cast<int>(h_edge_src.size()) != num_edges ||
-            static_cast<int>(h_edge_weights.size()) != num_edges * NOBJS) {
-            set_reason(reason, "Internal error packing BDD edges for CUDA enumeration");
-            return NULL;
-        }
-
-        packed_layers[l].in_edge_offsets = h_in_offsets;
-        packed_layers[l].edge_src = h_edge_src;
-        packed_layers[l].edge_weights = h_edge_weights;
-        if (pack_knapsack_meta) {
-            packed_layers[l].min_weight = h_min_weight;
-            packed_layers[l].single_parent_id = h_parent_id;
-            packed_layers[l].single_parent_arc = h_parent_arc;
-        }
-    }
+    pack_bdd_layers(bdd, packed_layers, false, false, problem_type, state_dominance, maximization);
     if (stats != NULL) {
         stats->wall_pack_transfer_s += std::chrono::duration_cast<std::chrono::duration<double> >(std::chrono::steady_clock::now() - pack_begin).count();
         if (!sample_gpu_memory_peak(reason, gpu_mem_baseline_used_bytes, &gpu_mem_peak_used_bytes, &gpu_mem_peak_reserved_bytes)) {
@@ -722,7 +631,6 @@ ParetoFrontier* enumerate_bdd_topdown(BDD* bdd,
     bool warned_non_knapsack_dominance = false;
 
     for (int l = 1; l < bdd->num_layers; ++l) {
-        const auto layer_begin = std::chrono::steady_clock::now();
         const int prev_nodes = bdd->layers[l - 1].size();
         const int next_nodes = bdd->layers[l].size();
         long long layer_candidates = 0;
@@ -735,327 +643,24 @@ ParetoFrontier* enumerate_bdd_topdown(BDD* bdd,
         thrust::device_vector<int> d_next_sizes(next_nodes, 0);
         thrust::device_vector<int> d_next_offsets(next_nodes + 1, 0);
         thrust::device_vector<ObjType> d_next_points;
-        thrust::device_vector<int> d_cand_counts(next_nodes, 0);
 
         PackedBDDLayer& packed = packed_layers[l];
-        const int num_edges = packed.edge_src.size();
-        if (num_edges > 0) {
-            thrust::device_vector<int> d_edge_counts(num_edges, 0);
-            thrust::device_vector<int> d_edge_offsets(num_edges + 1, 0);
-
-            ScopedCudaEventTimer edge_counts_timer("cudaEventCreate/count_edge_candidates_kernel", reason);
-            if (!edge_counts_timer.ok()) {
-                return NULL;
-            }
-            count_edge_candidates_kernel<<<ceil_div(num_edges, kThreadsPerBlock), kThreadsPerBlock>>>(
-                thrust::raw_pointer_cast(packed.edge_src.data()),
-                thrust::raw_pointer_cast(d_prev_offsets.data()),
-                thrust::raw_pointer_cast(d_edge_counts.data()),
-                num_edges);
-            if (!sync_kernel("count_edge_candidates_kernel", reason)) {
-                return NULL;
-            }
-            if (!edge_counts_timer.finish_and_add(stats != NULL ? &stats->kernel_expand_td_s : NULL,
-                                                  "cudaEventElapsedTime/count_edge_candidates_kernel")) {
-                return NULL;
-            }
-
-            thrust::exclusive_scan(d_edge_counts.begin(), d_edge_counts.end(), d_edge_offsets.begin());
-            const int last_offset = d_edge_offsets[num_edges - 1];
-            const int last_count = d_edge_counts[num_edges - 1];
-            const int total_candidates = last_offset + last_count;
-            layer_candidates = total_candidates;
-            d_edge_offsets[num_edges] = total_candidates;
-
-            if (total_candidates > 0) {
-                thrust::device_vector<int> d_dst_blocks(next_nodes, 0);
-                ScopedCudaEventTimer dst_counts_timer("cudaEventCreate/count_destination_candidates_kernel_v3", reason);
-                if (!dst_counts_timer.ok()) {
-                    return NULL;
-                }
-                count_destination_candidates_kernel<<<ceil_div(next_nodes, kThreadsPerBlock), kThreadsPerBlock>>>(
-                    thrust::raw_pointer_cast(packed.in_edge_offsets.data()),
-                    thrust::raw_pointer_cast(d_edge_offsets.data()),
-                    next_nodes,
-                    thrust::raw_pointer_cast(d_cand_counts.data()),
-                    thrust::raw_pointer_cast(d_dst_blocks.data()));
-                if (!sync_kernel("count_destination_candidates_kernel_v3", reason)) {
-                    return NULL;
-                }
-                if (!dst_counts_timer.finish_and_add(stats != NULL ? &stats->kernel_expand_td_s : NULL,
-                                                     "cudaEventElapsedTime/count_destination_candidates_kernel_v3")) {
-                    return NULL;
-                }
-                layer_candidates_std = population_std_from_device_counts(d_cand_counts);
-
-                const long long max_candidate_points_per_batch = 96000000LL;
-                if (total_candidates > max_candidate_points_per_batch) {
-                    thrust::host_vector<int> h_in_edge_offsets = packed.in_edge_offsets;
-                    thrust::host_vector<int> h_edge_offsets = d_edge_offsets;
-
-                    d_next_points.clear();
-                    d_next_sizes.assign(next_nodes, 0);
-
-                    int dst_begin = 0;
-                    while (dst_begin < next_nodes) {
-                        int dst_end = dst_begin + 1;
-                        long long batch_candidates =
-                            static_cast<long long>(h_edge_offsets[h_in_edge_offsets[dst_end]]) -
-                            static_cast<long long>(h_edge_offsets[h_in_edge_offsets[dst_begin]]);
-
-                        while (dst_end < next_nodes && batch_candidates < max_candidate_points_per_batch) {
-                            const long long next_candidates =
-                                static_cast<long long>(h_edge_offsets[h_in_edge_offsets[dst_end + 1]]) -
-                                static_cast<long long>(h_edge_offsets[h_in_edge_offsets[dst_begin]]);
-                            if (next_candidates > max_candidate_points_per_batch && batch_candidates > 0) {
-                                break;
-                            }
-                            ++dst_end;
-                            batch_candidates = next_candidates;
-                        }
-
-                        if (batch_candidates <= 0) {
-                            ++dst_begin;
-                            continue;
-                        }
-
-                        const int edge_begin = h_in_edge_offsets[dst_begin];
-                        const int edge_end = h_in_edge_offsets[dst_end];
-                        const int batch_edges = edge_end - edge_begin;
-                        const int batch_nodes = dst_end - dst_begin;
-
-                        thrust::host_vector<int> h_batch_in_offsets(batch_nodes + 1, 0);
-                        for (int i = 0; i <= batch_nodes; ++i) {
-                            h_batch_in_offsets[i] = h_in_edge_offsets[dst_begin + i] - edge_begin;
-                        }
-                        thrust::device_vector<int> d_batch_in_offsets = h_batch_in_offsets;
-                        thrust::device_vector<int> d_batch_edge_offsets(batch_edges + 1, 0);
-
-                        thrust::exclusive_scan(d_edge_counts.begin() + edge_begin,
-                                               d_edge_counts.begin() + edge_end,
-                                               d_batch_edge_offsets.begin());
-                        const int batch_last_offset = d_batch_edge_offsets[batch_edges - 1];
-                        const int batch_last_count = d_edge_counts[edge_end - 1];
-                        const int batch_total_candidates = batch_last_offset + batch_last_count;
-                        d_batch_edge_offsets[batch_edges] = batch_total_candidates;
-                        if (batch_total_candidates <= 0) {
-                            dst_begin = dst_end;
-                            continue;
-                        }
-
-                        thrust::device_vector<ObjType> d_batch_cand_points(batch_total_candidates * NOBJS, 0);
-                        ScopedCudaEventTimer batch_expand_timer("cudaEventCreate/batch_materialize_edge_candidates_kernel", reason);
-                        if (!batch_expand_timer.ok()) {
-                            return NULL;
-                        }
-                        materialize_edge_candidates_kernel<<<ceil_div(batch_edges, kThreadsPerBlock), kThreadsPerBlock>>>(
-                            thrust::raw_pointer_cast(packed.edge_src.data()) + edge_begin,
-                            thrust::raw_pointer_cast(packed.edge_weights.data()) + edge_begin * NOBJS,
-                            thrust::raw_pointer_cast(d_batch_edge_offsets.data()),
-                            thrust::raw_pointer_cast(d_edge_counts.data()) + edge_begin,
-                            thrust::raw_pointer_cast(d_prev_offsets.data()),
-                            thrust::raw_pointer_cast(d_prev_points.data()),
-                            batch_edges,
-                            thrust::raw_pointer_cast(d_batch_cand_points.data()));
-                        if (!sync_kernel("batch_materialize_edge_candidates_kernel", reason)) {
-                            return NULL;
-                        }
-                        if (!batch_expand_timer.finish_and_add(stats != NULL ? &stats->kernel_expand_td_s : NULL,
-                                                               "cudaEventElapsedTime/batch_materialize_edge_candidates_kernel")) {
-                            return NULL;
-                        }
-                        if (stats != NULL &&
-                            !sample_gpu_memory_peak(reason, gpu_mem_baseline_used_bytes, &gpu_mem_peak_used_bytes, &gpu_mem_peak_reserved_bytes))
-                        {
-                            return NULL;
-                        }
-
-                        thrust::device_vector<int> d_batch_sizes(batch_nodes, 0);
-                        thrust::device_vector<int> d_batch_blocks(batch_nodes, 0);
-                        count_destination_candidates_kernel<<<ceil_div(batch_nodes, kThreadsPerBlock), kThreadsPerBlock>>>(
-                            thrust::raw_pointer_cast(d_batch_in_offsets.data()),
-                            thrust::raw_pointer_cast(d_batch_edge_offsets.data()),
-                            batch_nodes,
-                            thrust::raw_pointer_cast(d_batch_sizes.data()),
-                            thrust::raw_pointer_cast(d_batch_blocks.data()));
-                        if (!sync_kernel("batch_count_destination_candidates_kernel", reason)) {
-                            return NULL;
-                        }
-
-                        thrust::device_vector<int> d_batch_alive(batch_total_candidates, 0);
-                        thrust::device_vector<int> d_batch_next_sizes(batch_nodes, 0);
-                        const int batch_max_seg_size = thrust::reduce(d_batch_sizes.begin(),
-                                                                      d_batch_sizes.end(),
-                                                                      0,
-                                                                      thrust::maximum<int>());
-                        if (batch_max_seg_size > 0) {
-                            thrust::device_vector<int> d_batch_block_offsets(batch_nodes + 1, 0);
-                            thrust::exclusive_scan(d_batch_blocks.begin(),
-                                                   d_batch_blocks.end(),
-                                                   d_batch_block_offsets.begin());
-                            d_batch_block_offsets[batch_nodes] =
-                                thrust::reduce(d_batch_blocks.begin(), d_batch_blocks.end(), 0);
-
-                            const int batch_total_blocks = d_batch_block_offsets[batch_nodes];
-                            if (batch_total_blocks > 0) {
-                                ScopedCudaEventTimer batch_dom_timer("cudaEventCreate/batch_mark_dominated_by_dst_dynamic_1d_kernel", reason);
-                                if (!batch_dom_timer.ok()) {
-                                    return NULL;
-                                }
-                                mark_dominated_by_dst_dynamic_1d_kernel<<<batch_total_blocks, kThreadsPerBlock>>>(
-                                    thrust::raw_pointer_cast(d_batch_cand_points.data()),
-                                    thrust::raw_pointer_cast(d_batch_in_offsets.data()),
-                                    thrust::raw_pointer_cast(d_batch_edge_offsets.data()),
-                                    thrust::raw_pointer_cast(d_batch_block_offsets.data()),
-                                    batch_nodes,
-                                    thrust::raw_pointer_cast(d_batch_alive.data()),
-                                    thrust::raw_pointer_cast(d_batch_next_sizes.data()));
-                                if (!sync_kernel("batch_mark_dominated_by_dst_dynamic_1d_kernel", reason)) {
-                                    return NULL;
-                                }
-                                if (!batch_dom_timer.finish_and_add(stats != NULL ? &stats->kernel_dominance_s : NULL,
-                                                                    "cudaEventElapsedTime/batch_mark_dominated_by_dst_dynamic_1d_kernel")) {
-                                    return NULL;
-                                }
-                            }
-                        }
-
-                        thrust::device_vector<int> d_batch_alive_prefix(batch_total_candidates, 0);
-                        thrust::exclusive_scan(d_batch_alive.begin(),
-                                               d_batch_alive.end(),
-                                               d_batch_alive_prefix.begin());
-                        const int batch_total_next =
-                            thrust::reduce(d_batch_next_sizes.begin(), d_batch_next_sizes.end(), 0);
-
-                        thrust::device_vector<ObjType> d_batch_next_points(batch_total_next * NOBJS, 0);
-                        if (batch_total_next > 0) {
-                            ScopedCudaEventTimer batch_scatter_timer("cudaEventCreate/batch_compact_alive_points_kernel", reason);
-                            if (!batch_scatter_timer.ok()) {
-                                return NULL;
-                            }
-                            compact_alive_points_kernel<<<ceil_div(batch_total_candidates, kThreadsPerBlock), kThreadsPerBlock>>>(
-                                thrust::raw_pointer_cast(d_batch_alive.data()),
-                                thrust::raw_pointer_cast(d_batch_alive_prefix.data()),
-                                thrust::raw_pointer_cast(d_batch_cand_points.data()),
-                                thrust::raw_pointer_cast(d_batch_next_points.data()),
-                                batch_total_candidates);
-                            if (!sync_kernel("batch_compact_alive_points_kernel", reason)) {
-                                return NULL;
-                            }
-                            if (!batch_scatter_timer.finish_and_add(stats != NULL ? &stats->kernel_expand_td_s : NULL,
-                                                                    "cudaEventElapsedTime/batch_compact_alive_points_kernel")) {
-                                return NULL;
-                            }
-
-                            const size_t old_size = d_next_points.size();
-                            d_next_points.resize(old_size + d_batch_next_points.size());
-                            thrust::copy(d_batch_next_points.begin(),
-                                         d_batch_next_points.end(),
-                                         d_next_points.begin() + old_size);
-                        }
-
-                        thrust::copy(d_batch_next_sizes.begin(),
-                                     d_batch_next_sizes.end(),
-                                     d_next_sizes.begin() + dst_begin);
-
-                        dst_begin = dst_end;
-                    }
-
-                    const int total_next = thrust::reduce(d_next_sizes.begin(), d_next_sizes.end(), 0);
-                    thrust::exclusive_scan(d_next_sizes.begin(), d_next_sizes.end(), d_next_offsets.begin());
-                    d_next_offsets[next_nodes] = total_next;
-                } else {
-                    thrust::device_vector<ObjType> d_cand_points(total_candidates * NOBJS, 0);
-
-                    ScopedCudaEventTimer expand_timer("cudaEventCreate/materialize_edge_candidates_kernel", reason);
-                    if (!expand_timer.ok()) {
-                        return NULL;
-                    }
-                    materialize_edge_candidates_kernel<<<ceil_div(num_edges, kThreadsPerBlock), kThreadsPerBlock>>>(
-                        thrust::raw_pointer_cast(packed.edge_src.data()),
-                        thrust::raw_pointer_cast(packed.edge_weights.data()),
-                        thrust::raw_pointer_cast(d_edge_offsets.data()),
-                        thrust::raw_pointer_cast(d_edge_counts.data()),
-                        thrust::raw_pointer_cast(d_prev_offsets.data()),
-                        thrust::raw_pointer_cast(d_prev_points.data()),
-                        num_edges,
-                        thrust::raw_pointer_cast(d_cand_points.data()));
-                    if (!sync_kernel("materialize_edge_candidates_kernel", reason)) {
-                        return NULL;
-                    }
-                    if (!expand_timer.finish_and_add(stats != NULL ? &stats->kernel_expand_td_s : NULL,
-                                                     "cudaEventElapsedTime/materialize_edge_candidates_kernel")) {
-                        return NULL;
-                    }
-                    // Primary peak checkpoint: candidate points are fully materialized before dominance compaction.
-                    if (stats != NULL &&
-                        !sample_gpu_memory_peak(reason, gpu_mem_baseline_used_bytes, &gpu_mem_peak_used_bytes, &gpu_mem_peak_reserved_bytes))
-                    {
-                        return NULL;
-                    }
-
-                    thrust::device_vector<int> d_alive(total_candidates, 0);
-                    const int max_seg_size = thrust::reduce(d_cand_counts.begin(),
-                                                            d_cand_counts.end(),
-                                                            0,
-                                                            thrust::maximum<int>());
-                    if (max_seg_size > 0) {
-                        thrust::device_vector<int> d_block_offsets(next_nodes + 1, 0);
-                        thrust::exclusive_scan(d_dst_blocks.begin(), d_dst_blocks.end(), d_block_offsets.begin());
-                        d_block_offsets[next_nodes] = thrust::reduce(d_dst_blocks.begin(), d_dst_blocks.end(), 0);
-                        const int total_blocks = d_block_offsets[next_nodes];
-                        if (total_blocks > 0) {
-                            ScopedCudaEventTimer dom_timer("cudaEventCreate/mark_dominated_by_dst_dynamic_1d_kernel", reason);
-                            if (!dom_timer.ok()) {
-                                return NULL;
-                            }
-                            mark_dominated_by_dst_dynamic_1d_kernel<<<total_blocks, kThreadsPerBlock>>>(
-                                thrust::raw_pointer_cast(d_cand_points.data()),
-                                thrust::raw_pointer_cast(packed.in_edge_offsets.data()),
-                                thrust::raw_pointer_cast(d_edge_offsets.data()),
-                                thrust::raw_pointer_cast(d_block_offsets.data()),
-                                next_nodes,
-                                thrust::raw_pointer_cast(d_alive.data()),
-                                thrust::raw_pointer_cast(d_next_sizes.data()));
-                            if (!sync_kernel("mark_dominated_by_dst_dynamic_1d_kernel", reason)) {
-                                return NULL;
-                            }
-                            if (!dom_timer.finish_and_add(stats != NULL ? &stats->kernel_dominance_s : NULL,
-                                                          "cudaEventElapsedTime/mark_dominated_by_dst_dynamic_1d_kernel")) {
-                                return NULL;
-                            }
-                        }
-                    }
-
-                    thrust::device_vector<int> d_alive_prefix(total_candidates, 0);
-                    thrust::exclusive_scan(d_alive.begin(), d_alive.end(), d_alive_prefix.begin());
-                    const int total_next = thrust::reduce(d_next_sizes.begin(), d_next_sizes.end(), 0);
-
-                    thrust::exclusive_scan(d_next_sizes.begin(), d_next_sizes.end(), d_next_offsets.begin());
-                    d_next_offsets[next_nodes] = total_next;
-
-                    d_next_points.resize(total_next * NOBJS);
-                    if (total_next > 0) {
-                        ScopedCudaEventTimer scatter_timer("cudaEventCreate/compact_alive_points_kernel", reason);
-                        if (!scatter_timer.ok()) {
-                            return NULL;
-                        }
-                        compact_alive_points_kernel<<<ceil_div(total_candidates, kThreadsPerBlock), kThreadsPerBlock>>>(
-                            thrust::raw_pointer_cast(d_alive.data()),
-                            thrust::raw_pointer_cast(d_alive_prefix.data()),
-                            thrust::raw_pointer_cast(d_cand_points.data()),
-                            thrust::raw_pointer_cast(d_next_points.data()),
-                            total_candidates);
-                        if (!sync_kernel("compact_alive_points_kernel", reason)) {
-                            return NULL;
-                        }
-                        if (!scatter_timer.finish_and_add(stats != NULL ? &stats->kernel_expand_td_s : NULL,
-                                                          "cudaEventElapsedTime/compact_alive_points_kernel")) {
-                            return NULL;
-                        }
-                    }
-                }
-            }
+        bool expand_ok = topdown_expand_bdd_layer(
+            packed,
+            d_prev_offsets,
+            d_prev_points,
+            d_next_sizes,
+            d_next_offsets,
+            d_next_points,
+            reason,
+            &layer_candidates,
+            &layer_candidates_std,
+            stats != NULL ? &gpu_mem_baseline_used_bytes : NULL,
+            stats != NULL ? &gpu_mem_peak_used_bytes : NULL,
+            stats != NULL ? &gpu_mem_peak_reserved_bytes : NULL,
+            stats);
+        if (!expand_ok) {
+            return NULL;
         }
 
         if (state_dominance > 0) {
@@ -1174,3 +779,876 @@ bool topdown_expand_mdd_layer(
         gpu_mem_peak_used_bytes,
         gpu_mem_peak_reserved_bytes);
 }
+
+bool topdown_expand_bdd_layer(
+    const PackedBDDLayer& packed_layer,
+    const thrust::device_vector<int>& d_prev_offsets,
+    const thrust::device_vector<ObjType>& d_prev_points,
+    thrust::device_vector<int>& d_next_sizes,
+    thrust::device_vector<int>& d_next_offsets,
+    thrust::device_vector<ObjType>& d_next_points,
+    std::string* reason,
+    long long* total_candidates_out,
+    double* std_candidates_out,
+    long long* gpu_mem_baseline_used_bytes,
+    long long* gpu_mem_peak_used_bytes,
+    long long* gpu_mem_peak_reserved_bytes,
+    EnumerationStats* stats) {
+
+    const int next_nodes = packed_layer.num_nodes;
+    const int num_edges = packed_layer.td_num_edges;
+
+    long long layer_candidates = 0;
+    double layer_candidates_std = 0.0;
+
+    if (num_edges > 0) {
+        thrust::device_vector<int> d_edge_counts(num_edges, 0);
+        thrust::device_vector<int> d_edge_offsets(num_edges + 1, 0);
+
+        ScopedCudaEventTimer edge_counts_timer("cudaEventCreate/count_edge_candidates_kernel", reason);
+        if (!edge_counts_timer.ok()) {
+            return false;
+        }
+        count_edge_candidates_kernel<<<ceil_div(num_edges, kThreadsPerBlock), kThreadsPerBlock>>>(
+            thrust::raw_pointer_cast(packed_layer.td_edge_src.data()),
+            thrust::raw_pointer_cast(d_prev_offsets.data()),
+            thrust::raw_pointer_cast(d_edge_counts.data()),
+            num_edges);
+        if (!sync_kernel("count_edge_candidates_kernel", reason)) {
+            return false;
+        }
+        if (!edge_counts_timer.finish_and_add(stats != NULL ? &stats->kernel_expand_td_s : NULL,
+                                              "cudaEventElapsedTime/count_edge_candidates_kernel")) {
+            return false;
+        }
+
+        thrust::exclusive_scan(d_edge_counts.begin(), d_edge_counts.end(), d_edge_offsets.begin());
+        const int last_offset = d_edge_offsets[num_edges - 1];
+        const int last_count = d_edge_counts[num_edges - 1];
+        const int total_candidates = last_offset + last_count;
+        layer_candidates = total_candidates;
+        d_edge_offsets[num_edges] = total_candidates;
+
+        if (total_candidates > 0) {
+            thrust::device_vector<int> d_cand_counts(next_nodes, 0);
+            thrust::device_vector<int> d_dst_blocks(next_nodes, 0);
+            ScopedCudaEventTimer dst_counts_timer("cudaEventCreate/count_destination_candidates_kernel_v3", reason);
+            if (!dst_counts_timer.ok()) {
+                return false;
+            }
+            count_destination_candidates_kernel<<<ceil_div(next_nodes, kThreadsPerBlock), kThreadsPerBlock>>>(
+                thrust::raw_pointer_cast(packed_layer.td_in_edge_offsets.data()),
+                thrust::raw_pointer_cast(d_edge_offsets.data()),
+                next_nodes,
+                thrust::raw_pointer_cast(d_cand_counts.data()),
+                thrust::raw_pointer_cast(d_dst_blocks.data()));
+            if (!sync_kernel("count_destination_candidates_kernel_v3", reason)) {
+                return false;
+            }
+            if (!dst_counts_timer.finish_and_add(stats != NULL ? &stats->kernel_expand_td_s : NULL,
+                                                 "cudaEventElapsedTime/count_destination_candidates_kernel_v3")) {
+                return false;
+            }
+            layer_candidates_std = population_std_from_device_counts(d_cand_counts);
+
+            const long long max_candidate_points_per_batch = 96000000LL;
+            if (total_candidates > max_candidate_points_per_batch) {
+                thrust::host_vector<int> h_in_edge_offsets = packed_layer.td_in_edge_offsets;
+                thrust::host_vector<int> h_edge_offsets = d_edge_offsets;
+
+                d_next_points.clear();
+                d_next_sizes.assign(next_nodes, 0);
+
+                int dst_begin = 0;
+                while (dst_begin < next_nodes) {
+                    int dst_end = dst_begin + 1;
+                    long long batch_candidates =
+                        static_cast<long long>(h_edge_offsets[h_in_edge_offsets[dst_end]]) -
+                        static_cast<long long>(h_edge_offsets[h_in_edge_offsets[dst_begin]]);
+
+                    while (dst_end < next_nodes && batch_candidates < max_candidate_points_per_batch) {
+                        const long long next_candidates =
+                            static_cast<long long>(h_edge_offsets[h_in_edge_offsets[dst_end + 1]]) -
+                            static_cast<long long>(h_edge_offsets[h_in_edge_offsets[dst_begin]]);
+                        if (next_candidates > max_candidate_points_per_batch && batch_candidates > 0) {
+                            break;
+                        }
+                        ++dst_end;
+                        batch_candidates = next_candidates;
+                    }
+
+                    if (batch_candidates <= 0) {
+                        ++dst_begin;
+                        continue;
+                    }
+
+                    const int edge_begin = h_in_edge_offsets[dst_begin];
+                    const int edge_end = h_in_edge_offsets[dst_end];
+                    const int batch_edges = edge_end - edge_begin;
+                    const int batch_nodes = dst_end - dst_begin;
+
+                    thrust::host_vector<int> h_batch_in_offsets(batch_nodes + 1, 0);
+                    for (int i = 0; i <= batch_nodes; ++i) {
+                        h_batch_in_offsets[i] = h_in_edge_offsets[dst_begin + i] - edge_begin;
+                    }
+                    thrust::device_vector<int> d_batch_in_offsets = h_batch_in_offsets;
+                    thrust::device_vector<int> d_batch_edge_offsets(batch_edges + 1, 0);
+
+                    thrust::exclusive_scan(d_edge_counts.begin() + edge_begin,
+                                           d_edge_counts.begin() + edge_end,
+                                           d_batch_edge_offsets.begin());
+                    const int batch_last_offset = d_batch_edge_offsets[batch_edges - 1];
+                    const int batch_last_count = d_edge_counts[edge_end - 1];
+                    const int batch_total_candidates = batch_last_offset + batch_last_count;
+                    d_batch_edge_offsets[batch_edges] = batch_total_candidates;
+                    if (batch_total_candidates <= 0) {
+                        dst_begin = dst_end;
+                        continue;
+                    }
+
+                    thrust::device_vector<ObjType> d_batch_cand_points(batch_total_candidates * NOBJS, 0);
+                    ScopedCudaEventTimer batch_expand_timer("cudaEventCreate/batch_materialize_edge_candidates_kernel", reason);
+                    if (!batch_expand_timer.ok()) {
+                        return false;
+                    }
+                    materialize_edge_candidates_kernel<<<ceil_div(batch_edges, kThreadsPerBlock), kThreadsPerBlock>>>(
+                        thrust::raw_pointer_cast(packed_layer.td_edge_src.data()) + edge_begin,
+                        thrust::raw_pointer_cast(packed_layer.td_edge_weights.data()) + edge_begin * NOBJS,
+                        thrust::raw_pointer_cast(d_batch_edge_offsets.data()),
+                        thrust::raw_pointer_cast(d_edge_counts.data()) + edge_begin,
+                        thrust::raw_pointer_cast(d_prev_offsets.data()),
+                        thrust::raw_pointer_cast(d_prev_points.data()),
+                        batch_edges,
+                        thrust::raw_pointer_cast(d_batch_cand_points.data()));
+                    if (!sync_kernel("batch_materialize_edge_candidates_kernel", reason)) {
+                        return false;
+                    }
+                    if (!batch_expand_timer.finish_and_add(stats != NULL ? &stats->kernel_expand_td_s : NULL,
+                                                           "cudaEventElapsedTime/batch_materialize_edge_candidates_kernel")) {
+                        return false;
+                    }
+                    if (stats != NULL && gpu_mem_baseline_used_bytes != NULL &&
+                        !sample_gpu_memory_peak(reason, *gpu_mem_baseline_used_bytes, gpu_mem_peak_used_bytes, gpu_mem_peak_reserved_bytes))
+                    {
+                        return false;
+                    }
+
+                    thrust::device_vector<int> d_batch_sizes(batch_nodes, 0);
+                    thrust::device_vector<int> d_batch_blocks(batch_nodes, 0);
+                    count_destination_candidates_kernel<<<ceil_div(batch_nodes, kThreadsPerBlock), kThreadsPerBlock>>>(
+                        thrust::raw_pointer_cast(d_batch_in_offsets.data()),
+                        thrust::raw_pointer_cast(d_batch_edge_offsets.data()),
+                        batch_nodes,
+                        thrust::raw_pointer_cast(d_batch_sizes.data()),
+                        thrust::raw_pointer_cast(d_batch_blocks.data()));
+                    if (!sync_kernel("batch_count_destination_candidates_kernel", reason)) {
+                        return false;
+                    }
+
+                    thrust::device_vector<int> d_batch_alive(batch_total_candidates, 0);
+                    thrust::device_vector<int> d_batch_next_sizes(batch_nodes, 0);
+                    const int batch_max_seg_size = thrust::reduce(d_batch_sizes.begin(),
+                                                                  d_batch_sizes.end(),
+                                                                  0,
+                                                                  thrust::maximum<int>());
+                    if (batch_max_seg_size > 0) {
+                        thrust::device_vector<int> d_batch_block_offsets(batch_nodes + 1, 0);
+                        thrust::exclusive_scan(d_batch_blocks.begin(),
+                                               d_batch_blocks.end(),
+                                               d_batch_block_offsets.begin());
+                        d_batch_block_offsets[batch_nodes] =
+                            thrust::reduce(d_batch_blocks.begin(), d_batch_blocks.end(), 0);
+
+                        const int batch_total_blocks = d_batch_block_offsets[batch_nodes];
+                        if (batch_total_blocks > 0) {
+                            ScopedCudaEventTimer batch_dom_timer("cudaEventCreate/batch_mark_dominated_by_dst_dynamic_1d_kernel", reason);
+                            if (!batch_dom_timer.ok()) {
+                                return false;
+                            }
+                            mark_dominated_by_dst_dynamic_1d_kernel<<<batch_total_blocks, kThreadsPerBlock>>>(
+                                thrust::raw_pointer_cast(d_batch_cand_points.data()),
+                                thrust::raw_pointer_cast(d_batch_in_offsets.data()),
+                                thrust::raw_pointer_cast(d_batch_edge_offsets.data()),
+                                thrust::raw_pointer_cast(d_batch_block_offsets.data()),
+                                batch_nodes,
+                                thrust::raw_pointer_cast(d_batch_alive.data()),
+                                thrust::raw_pointer_cast(d_batch_next_sizes.data()));
+                            if (!sync_kernel("batch_mark_dominated_by_dst_dynamic_1d_kernel", reason)) {
+                                return false;
+                            }
+                            if (!batch_dom_timer.finish_and_add(stats != NULL ? &stats->kernel_dominance_s : NULL,
+                                                                "cudaEventElapsedTime/batch_mark_dominated_by_dst_dynamic_1d_kernel")) {
+                                return false;
+                            }
+                        }
+                    }
+
+                    thrust::device_vector<int> d_batch_alive_prefix(batch_total_candidates, 0);
+                    thrust::exclusive_scan(d_batch_alive.begin(),
+                                           d_batch_alive.end(),
+                                           d_batch_alive_prefix.begin());
+                    const int batch_total_next =
+                        thrust::reduce(d_batch_next_sizes.begin(), d_batch_next_sizes.end(), 0);
+
+                    thrust::device_vector<ObjType> d_batch_next_points(batch_total_next * NOBJS, 0);
+                    if (batch_total_next > 0) {
+                        ScopedCudaEventTimer batch_scatter_timer("cudaEventCreate/batch_compact_alive_points_kernel", reason);
+                        if (!batch_scatter_timer.ok()) {
+                            return false;
+                        }
+                        compact_alive_points_kernel<<<ceil_div(batch_total_candidates, kThreadsPerBlock), kThreadsPerBlock>>>(
+                            thrust::raw_pointer_cast(d_batch_alive.data()),
+                            thrust::raw_pointer_cast(d_batch_alive_prefix.data()),
+                            thrust::raw_pointer_cast(d_batch_cand_points.data()),
+                            thrust::raw_pointer_cast(d_batch_next_points.data()),
+                            batch_total_candidates);
+                        if (!sync_kernel("batch_compact_alive_points_kernel", reason)) {
+                            return false;
+                        }
+                        if (!batch_scatter_timer.finish_and_add(stats != NULL ? &stats->kernel_expand_td_s : NULL,
+                                                                "cudaEventElapsedTime/batch_compact_alive_points_kernel")) {
+                            return false;
+                        }
+
+                        const size_t old_size = d_next_points.size();
+                        d_next_points.resize(old_size + d_batch_next_points.size());
+                        thrust::copy(d_batch_next_points.begin(),
+                                     d_batch_next_points.end(),
+                                     d_next_points.begin() + old_size);
+                    }
+
+                    thrust::copy(d_batch_next_sizes.begin(),
+                                 d_batch_next_sizes.end(),
+                                 d_next_sizes.begin() + dst_begin);
+
+                    dst_begin = dst_end;
+                }
+
+                const int total_next = thrust::reduce(d_next_sizes.begin(), d_next_sizes.end(), 0);
+                thrust::exclusive_scan(d_next_sizes.begin(), d_next_sizes.end(), d_next_offsets.begin());
+                d_next_offsets[next_nodes] = total_next;
+            } else {
+                thrust::device_vector<ObjType> d_cand_points(total_candidates * NOBJS, 0);
+
+                ScopedCudaEventTimer expand_timer("cudaEventCreate/materialize_edge_candidates_kernel", reason);
+                if (!expand_timer.ok()) {
+                    return false;
+                }
+                materialize_edge_candidates_kernel<<<ceil_div(num_edges, kThreadsPerBlock), kThreadsPerBlock>>>(
+                    thrust::raw_pointer_cast(packed_layer.td_edge_src.data()),
+                    thrust::raw_pointer_cast(packed_layer.td_edge_weights.data()),
+                    thrust::raw_pointer_cast(d_edge_offsets.data()),
+                    thrust::raw_pointer_cast(d_edge_counts.data()),
+                    thrust::raw_pointer_cast(d_prev_offsets.data()),
+                    thrust::raw_pointer_cast(d_prev_points.data()),
+                    num_edges,
+                    thrust::raw_pointer_cast(d_cand_points.data()));
+                if (!sync_kernel("materialize_edge_candidates_kernel", reason)) {
+                    return false;
+                }
+                if (!expand_timer.finish_and_add(stats != NULL ? &stats->kernel_expand_td_s : NULL,
+                                                 "cudaEventElapsedTime/materialize_edge_candidates_kernel")) {
+                    return false;
+                }
+                if (stats != NULL && gpu_mem_baseline_used_bytes != NULL &&
+                    !sample_gpu_memory_peak(reason, *gpu_mem_baseline_used_bytes, gpu_mem_peak_used_bytes, gpu_mem_peak_reserved_bytes))
+                {
+                    return false;
+                }
+
+                thrust::device_vector<int> d_alive(total_candidates, 0);
+                const int max_seg_size = thrust::reduce(d_cand_counts.begin(),
+                                                        d_cand_counts.end(),
+                                                        0,
+                                                        thrust::maximum<int>());
+                if (max_seg_size > 0) {
+                    thrust::device_vector<int> d_block_offsets(next_nodes + 1, 0);
+                    thrust::exclusive_scan(d_dst_blocks.begin(), d_dst_blocks.end(), d_block_offsets.begin());
+                    d_block_offsets[next_nodes] = thrust::reduce(d_dst_blocks.begin(), d_dst_blocks.end(), 0);
+                    const int total_blocks = d_block_offsets[next_nodes];
+                    if (total_blocks > 0) {
+                        ScopedCudaEventTimer dom_timer("cudaEventCreate/mark_dominated_by_dst_dynamic_1d_kernel", reason);
+                        if (!dom_timer.ok()) {
+                            return false;
+                        }
+                        mark_dominated_by_dst_dynamic_1d_kernel<<<total_blocks, kThreadsPerBlock>>>(
+                            thrust::raw_pointer_cast(d_cand_points.data()),
+                            thrust::raw_pointer_cast(packed_layer.td_in_edge_offsets.data()),
+                            thrust::raw_pointer_cast(d_edge_offsets.data()),
+                            thrust::raw_pointer_cast(d_block_offsets.data()),
+                            next_nodes,
+                            thrust::raw_pointer_cast(d_alive.data()),
+                            thrust::raw_pointer_cast(d_next_sizes.data()));
+                        if (!sync_kernel("mark_dominated_by_dst_dynamic_1d_kernel", reason)) {
+                            return false;
+                        }
+                        if (!dom_timer.finish_and_add(stats != NULL ? &stats->kernel_dominance_s : NULL,
+                                                      "cudaEventElapsedTime/mark_dominated_by_dst_dynamic_1d_kernel")) {
+                            return false;
+                        }
+                    }
+                }
+
+                thrust::device_vector<int> d_alive_prefix(d_alive.size(), 0);
+                thrust::exclusive_scan(d_alive.begin(), d_alive.end(), d_alive_prefix.begin());
+                const int total_next = thrust::reduce(d_next_sizes.begin(), d_next_sizes.end(), 0);
+
+                thrust::exclusive_scan(d_next_sizes.begin(), d_next_sizes.end(), d_next_offsets.begin());
+                d_next_offsets[next_nodes] = total_next;
+
+                d_next_points.resize(total_next * NOBJS);
+                if (total_next > 0) {
+                    ScopedCudaEventTimer scatter_timer("cudaEventCreate/compact_alive_points_kernel", reason);
+                    if (!scatter_timer.ok()) {
+                        return false;
+                    }
+                    compact_alive_points_kernel<<<ceil_div(total_candidates, kThreadsPerBlock), kThreadsPerBlock>>>(
+                        thrust::raw_pointer_cast(d_alive.data()),
+                        thrust::raw_pointer_cast(d_alive_prefix.data()),
+                        thrust::raw_pointer_cast(d_cand_points.data()),
+                        thrust::raw_pointer_cast(d_next_points.data()),
+                        total_candidates);
+                    if (!sync_kernel("compact_alive_points_kernel", reason)) {
+                        return false;
+                    }
+                    if (!scatter_timer.finish_and_add(stats != NULL ? &stats->kernel_expand_td_s : NULL,
+                                                      "cudaEventElapsedTime/compact_alive_points_kernel")) {
+                        return false;
+                    }
+                }
+            }
+        }
+    }
+
+    if (total_candidates_out != NULL) {
+        *total_candidates_out = layer_candidates;
+    }
+    if (std_candidates_out != NULL) {
+        *std_candidates_out = layer_candidates_std;
+    }
+    return true;
+}
+
+bool bottomup_expand_bdd_layer(
+    const PackedBDDLayer& packed_layer,
+    const thrust::device_vector<int>& d_prev_offsets,
+    const thrust::device_vector<ObjType>& d_prev_points,
+    thrust::device_vector<int>& d_next_sizes,
+    thrust::device_vector<int>& d_next_offsets,
+    thrust::device_vector<ObjType>& d_next_points,
+    std::string* reason,
+    long long* total_candidates_out,
+    double* std_candidates_out,
+    long long* gpu_mem_baseline_used_bytes,
+    long long* gpu_mem_peak_used_bytes,
+    long long* gpu_mem_peak_reserved_bytes,
+    EnumerationStats* stats) {
+
+    const int next_nodes = packed_layer.num_nodes;
+    const int num_edges = packed_layer.bu_num_edges;
+
+    long long layer_candidates = 0;
+    double layer_candidates_std = 0.0;
+
+    if (num_edges > 0) {
+        thrust::device_vector<int> d_edge_counts(num_edges, 0);
+        thrust::device_vector<int> d_edge_offsets(num_edges + 1, 0);
+
+        ScopedCudaEventTimer edge_counts_timer("cudaEventCreate/count_edge_candidates_kernel", reason);
+        if (!edge_counts_timer.ok()) {
+            return false;
+        }
+        count_edge_candidates_kernel<<<ceil_div(num_edges, kThreadsPerBlock), kThreadsPerBlock>>>(
+            thrust::raw_pointer_cast(packed_layer.bu_edge_dst.data()),
+            thrust::raw_pointer_cast(d_prev_offsets.data()),
+            thrust::raw_pointer_cast(d_edge_counts.data()),
+            num_edges);
+        if (!sync_kernel("count_edge_candidates_kernel", reason)) {
+            return false;
+        }
+        if (!edge_counts_timer.finish_and_add(stats != NULL ? &stats->kernel_expand_td_s : NULL,
+                                              "cudaEventElapsedTime/count_edge_candidates_kernel")) {
+            return false;
+        }
+
+        thrust::exclusive_scan(d_edge_counts.begin(), d_edge_counts.end(), d_edge_offsets.begin());
+        const int last_offset = d_edge_offsets[num_edges - 1];
+        const int last_count = d_edge_counts[num_edges - 1];
+        const int total_candidates = last_offset + last_count;
+        layer_candidates = total_candidates;
+        d_edge_offsets[num_edges] = total_candidates;
+
+        if (total_candidates > 0) {
+            thrust::device_vector<int> d_cand_counts(next_nodes, 0);
+            thrust::device_vector<int> d_dst_blocks(next_nodes, 0);
+            ScopedCudaEventTimer dst_counts_timer("cudaEventCreate/count_destination_candidates_kernel_v3", reason);
+            if (!dst_counts_timer.ok()) {
+                return false;
+            }
+            count_destination_candidates_kernel<<<ceil_div(next_nodes, kThreadsPerBlock), kThreadsPerBlock>>>(
+                thrust::raw_pointer_cast(packed_layer.bu_out_edge_offsets.data()),
+                thrust::raw_pointer_cast(d_edge_offsets.data()),
+                next_nodes,
+                thrust::raw_pointer_cast(d_cand_counts.data()),
+                thrust::raw_pointer_cast(d_dst_blocks.data()));
+            if (!sync_kernel("count_destination_candidates_kernel_v3", reason)) {
+                return false;
+            }
+            if (!dst_counts_timer.finish_and_add(stats != NULL ? &stats->kernel_expand_td_s : NULL,
+                                                 "cudaEventElapsedTime/count_destination_candidates_kernel_v3")) {
+                return false;
+            }
+            layer_candidates_std = population_std_from_device_counts(d_cand_counts);
+
+            const long long max_candidate_points_per_batch = 96000000LL;
+            if (total_candidates > max_candidate_points_per_batch) {
+                thrust::host_vector<int> h_in_edge_offsets = packed_layer.bu_out_edge_offsets;
+                thrust::host_vector<int> h_edge_offsets = d_edge_offsets;
+
+                d_next_points.clear();
+                d_next_sizes.assign(next_nodes, 0);
+
+                int dst_begin = 0;
+                while (dst_begin < next_nodes) {
+                    int dst_end = dst_begin + 1;
+                    long long batch_candidates =
+                        static_cast<long long>(h_edge_offsets[h_in_edge_offsets[dst_end]]) -
+                        static_cast<long long>(h_edge_offsets[h_in_edge_offsets[dst_begin]]);
+
+                    while (dst_end < next_nodes && batch_candidates < max_candidate_points_per_batch) {
+                        const long long next_candidates =
+                            static_cast<long long>(h_edge_offsets[h_in_edge_offsets[dst_end + 1]]) -
+                            static_cast<long long>(h_edge_offsets[h_in_edge_offsets[dst_begin]]);
+                        if (next_candidates > max_candidate_points_per_batch && batch_candidates > 0) {
+                            break;
+                        }
+                        ++dst_end;
+                        batch_candidates = next_candidates;
+                    }
+
+                    if (batch_candidates <= 0) {
+                        ++dst_begin;
+                        continue;
+                    }
+
+                    const int edge_begin = h_in_edge_offsets[dst_begin];
+                    const int edge_end = h_in_edge_offsets[dst_end];
+                    const int batch_edges = edge_end - edge_begin;
+                    const int batch_nodes = dst_end - dst_begin;
+
+                    thrust::host_vector<int> h_batch_in_offsets(batch_nodes + 1, 0);
+                    for (int i = 0; i <= batch_nodes; ++i) {
+                        h_batch_in_offsets[i] = h_in_edge_offsets[dst_begin + i] - edge_begin;
+                    }
+                    thrust::device_vector<int> d_batch_in_offsets = h_batch_in_offsets;
+                    thrust::device_vector<int> d_batch_edge_offsets(batch_edges + 1, 0);
+
+                    thrust::exclusive_scan(d_edge_counts.begin() + edge_begin,
+                                           d_edge_counts.begin() + edge_end,
+                                           d_batch_edge_offsets.begin());
+                    const int batch_last_offset = d_batch_edge_offsets[batch_edges - 1];
+                    const int batch_last_count = d_edge_counts[edge_end - 1];
+                    const int batch_total_candidates = batch_last_offset + batch_last_count;
+                    d_batch_edge_offsets[batch_edges] = batch_total_candidates;
+                    if (batch_total_candidates <= 0) {
+                        dst_begin = dst_end;
+                        continue;
+                    }
+
+                    thrust::device_vector<ObjType> d_batch_cand_points(batch_total_candidates * NOBJS, 0);
+                    ScopedCudaEventTimer batch_expand_timer("cudaEventCreate/batch_materialize_edge_candidates_kernel", reason);
+                    if (!batch_expand_timer.ok()) {
+                        return false;
+                    }
+                    materialize_edge_candidates_kernel<<<ceil_div(batch_edges, kThreadsPerBlock), kThreadsPerBlock>>>(
+                        thrust::raw_pointer_cast(packed_layer.bu_edge_dst.data()) + edge_begin,
+                        thrust::raw_pointer_cast(packed_layer.bu_edge_weights.data()) + edge_begin * NOBJS,
+                        thrust::raw_pointer_cast(d_batch_edge_offsets.data()),
+                        thrust::raw_pointer_cast(d_edge_counts.data()) + edge_begin,
+                        thrust::raw_pointer_cast(d_prev_offsets.data()),
+                        thrust::raw_pointer_cast(d_prev_points.data()),
+                        batch_edges,
+                        thrust::raw_pointer_cast(d_batch_cand_points.data()));
+                    if (!sync_kernel("batch_materialize_edge_candidates_kernel", reason)) {
+                        return false;
+                    }
+                    if (!batch_expand_timer.finish_and_add(stats != NULL ? &stats->kernel_expand_td_s : NULL,
+                                                           "cudaEventElapsedTime/batch_materialize_edge_candidates_kernel")) {
+                        return false;
+                    }
+                    if (stats != NULL && gpu_mem_baseline_used_bytes != NULL &&
+                        !sample_gpu_memory_peak(reason, *gpu_mem_baseline_used_bytes, gpu_mem_peak_used_bytes, gpu_mem_peak_reserved_bytes))
+                    {
+                        return false;
+                    }
+
+                    thrust::device_vector<int> d_batch_sizes(batch_nodes, 0);
+                    thrust::device_vector<int> d_batch_blocks(batch_nodes, 0);
+                    count_destination_candidates_kernel<<<ceil_div(batch_nodes, kThreadsPerBlock), kThreadsPerBlock>>>(
+                        thrust::raw_pointer_cast(d_batch_in_offsets.data()),
+                        thrust::raw_pointer_cast(d_batch_edge_offsets.data()),
+                        batch_nodes,
+                        thrust::raw_pointer_cast(d_batch_sizes.data()),
+                        thrust::raw_pointer_cast(d_batch_blocks.data()));
+                    if (!sync_kernel("batch_count_destination_candidates_kernel", reason)) {
+                        return false;
+                    }
+
+                    thrust::device_vector<int> d_batch_alive(batch_total_candidates, 0);
+                    thrust::device_vector<int> d_batch_next_sizes(batch_nodes, 0);
+                    const int batch_max_seg_size = thrust::reduce(d_batch_sizes.begin(),
+                                                                  d_batch_sizes.end(),
+                                                                  0,
+                                                                  thrust::maximum<int>());
+                    if (batch_max_seg_size > 0) {
+                        thrust::device_vector<int> d_batch_block_offsets(batch_nodes + 1, 0);
+                        thrust::exclusive_scan(d_batch_blocks.begin(),
+                                               d_batch_blocks.end(),
+                                               d_batch_block_offsets.begin());
+                        d_batch_block_offsets[batch_nodes] =
+                            thrust::reduce(d_batch_blocks.begin(), d_batch_blocks.end(), 0);
+
+                        const int batch_total_blocks = d_batch_block_offsets[batch_nodes];
+                        if (batch_total_blocks > 0) {
+                            ScopedCudaEventTimer batch_dom_timer("cudaEventCreate/batch_mark_dominated_by_dst_dynamic_1d_kernel", reason);
+                            if (!batch_dom_timer.ok()) {
+                                return false;
+                            }
+                            mark_dominated_by_dst_dynamic_1d_kernel<<<batch_total_blocks, kThreadsPerBlock>>>(
+                                thrust::raw_pointer_cast(d_batch_cand_points.data()),
+                                thrust::raw_pointer_cast(d_batch_in_offsets.data()),
+                                thrust::raw_pointer_cast(d_batch_edge_offsets.data()),
+                                thrust::raw_pointer_cast(d_batch_block_offsets.data()),
+                                batch_nodes,
+                                thrust::raw_pointer_cast(d_batch_alive.data()),
+                                thrust::raw_pointer_cast(d_batch_next_sizes.data()));
+                            if (!sync_kernel("batch_mark_dominated_by_dst_dynamic_1d_kernel", reason)) {
+                                return false;
+                            }
+                            if (!batch_dom_timer.finish_and_add(stats != NULL ? &stats->kernel_dominance_s : NULL,
+                                                                "cudaEventElapsedTime/batch_mark_dominated_by_dst_dynamic_1d_kernel")) {
+                                return false;
+                            }
+                        }
+                    }
+
+                    thrust::device_vector<int> d_batch_alive_prefix(batch_total_candidates, 0);
+                    thrust::exclusive_scan(d_batch_alive.begin(),
+                                           d_batch_alive.end(),
+                                           d_batch_alive_prefix.begin());
+                    const int batch_total_next =
+                        thrust::reduce(d_batch_next_sizes.begin(), d_batch_next_sizes.end(), 0);
+
+                    thrust::device_vector<ObjType> d_batch_next_points(batch_total_next * NOBJS, 0);
+                    if (batch_total_next > 0) {
+                        ScopedCudaEventTimer batch_scatter_timer("cudaEventCreate/batch_compact_alive_points_kernel", reason);
+                        if (!batch_scatter_timer.ok()) {
+                            return false;
+                        }
+                        compact_alive_points_kernel<<<ceil_div(total_candidates, kThreadsPerBlock), kThreadsPerBlock>>>(
+                            thrust::raw_pointer_cast(d_batch_alive.data()),
+                            thrust::raw_pointer_cast(d_batch_alive_prefix.data()),
+                            thrust::raw_pointer_cast(d_batch_cand_points.data()),
+                            thrust::raw_pointer_cast(d_batch_next_points.data()),
+                            batch_total_candidates);
+                        if (!sync_kernel("batch_compact_alive_points_kernel", reason)) {
+                            return false;
+                        }
+                        if (!batch_scatter_timer.finish_and_add(stats != NULL ? &stats->kernel_expand_td_s : NULL,
+                                                                "cudaEventElapsedTime/batch_compact_alive_points_kernel")) {
+                            return false;
+                        }
+
+                        const size_t old_size = d_next_points.size();
+                        d_next_points.resize(old_size + d_batch_next_points.size());
+                        thrust::copy(d_batch_next_points.begin(),
+                                     d_batch_next_points.end(),
+                                     d_next_points.begin() + old_size);
+                    }
+
+                    thrust::copy(d_batch_next_sizes.begin(),
+                                 d_batch_next_sizes.end(),
+                                 d_next_sizes.begin() + dst_begin);
+
+                    dst_begin = dst_end;
+                }
+
+                const int total_next = thrust::reduce(d_next_sizes.begin(), d_next_sizes.end(), 0);
+                thrust::exclusive_scan(d_next_sizes.begin(), d_next_sizes.end(), d_next_offsets.begin());
+                d_next_offsets[next_nodes] = total_next;
+            } else {
+                thrust::device_vector<ObjType> d_cand_points(total_candidates * NOBJS, 0);
+
+                ScopedCudaEventTimer expand_timer("cudaEventCreate/materialize_edge_candidates_kernel", reason);
+                if (!expand_timer.ok()) {
+                    return false;
+                }
+                materialize_edge_candidates_kernel<<<ceil_div(num_edges, kThreadsPerBlock), kThreadsPerBlock>>>(
+                    thrust::raw_pointer_cast(packed_layer.bu_edge_dst.data()),
+                    thrust::raw_pointer_cast(packed_layer.bu_edge_weights.data()),
+                    thrust::raw_pointer_cast(d_edge_offsets.data()),
+                    thrust::raw_pointer_cast(d_edge_counts.data()),
+                    thrust::raw_pointer_cast(d_prev_offsets.data()),
+                    thrust::raw_pointer_cast(d_prev_points.data()),
+                    num_edges,
+                    thrust::raw_pointer_cast(d_cand_points.data()));
+                if (!sync_kernel("materialize_edge_candidates_kernel", reason)) {
+                    return false;
+                }
+                if (!expand_timer.finish_and_add(stats != NULL ? &stats->kernel_expand_td_s : NULL,
+                                                 "cudaEventElapsedTime/materialize_edge_candidates_kernel")) {
+                    return false;
+                }
+                if (stats != NULL && gpu_mem_baseline_used_bytes != NULL &&
+                    !sample_gpu_memory_peak(reason, *gpu_mem_baseline_used_bytes, gpu_mem_peak_used_bytes, gpu_mem_peak_reserved_bytes))
+                {
+                    return false;
+                }
+
+                thrust::device_vector<int> d_alive(total_candidates, 0);
+                const int max_seg_size = thrust::reduce(d_cand_counts.begin(),
+                                                        d_cand_counts.end(),
+                                                        0,
+                                                        thrust::maximum<int>());
+                if (max_seg_size > 0) {
+                    thrust::device_vector<int> d_block_offsets(next_nodes + 1, 0);
+                    thrust::exclusive_scan(d_dst_blocks.begin(), d_dst_blocks.end(), d_block_offsets.begin());
+                    d_block_offsets[next_nodes] = thrust::reduce(d_dst_blocks.begin(), d_dst_blocks.end(), 0);
+                    const int total_blocks = d_block_offsets[next_nodes];
+                    if (total_blocks > 0) {
+                        ScopedCudaEventTimer dom_timer("cudaEventCreate/mark_dominated_by_dst_dynamic_1d_kernel", reason);
+                        if (!dom_timer.ok()) {
+                            return false;
+                        }
+                        mark_dominated_by_dst_dynamic_1d_kernel<<<total_blocks, kThreadsPerBlock>>>(
+                            thrust::raw_pointer_cast(d_cand_points.data()),
+                            thrust::raw_pointer_cast(packed_layer.bu_out_edge_offsets.data()),
+                            thrust::raw_pointer_cast(d_edge_offsets.data()),
+                            thrust::raw_pointer_cast(d_block_offsets.data()),
+                            next_nodes,
+                            thrust::raw_pointer_cast(d_alive.data()),
+                            thrust::raw_pointer_cast(d_next_sizes.data()));
+                        if (!sync_kernel("mark_dominated_by_dst_dynamic_1d_kernel", reason)) {
+                            return false;
+                        }
+                        if (!dom_timer.finish_and_add(stats != NULL ? &stats->kernel_dominance_s : NULL,
+                                                      "cudaEventElapsedTime/mark_dominated_by_dst_dynamic_1d_kernel")) {
+                            return false;
+                        }
+                    }
+                }
+
+                thrust::device_vector<int> d_alive_prefix(d_alive.size(), 0);
+                thrust::exclusive_scan(d_alive.begin(), d_alive.end(), d_alive_prefix.begin());
+                const int total_next = thrust::reduce(d_next_sizes.begin(), d_next_sizes.end(), 0);
+
+                thrust::exclusive_scan(d_next_sizes.begin(), d_next_sizes.end(), d_next_offsets.begin());
+                d_next_offsets[next_nodes] = total_next;
+
+                d_next_points.resize(total_next * NOBJS);
+                if (total_next > 0) {
+                    ScopedCudaEventTimer scatter_timer("cudaEventCreate/compact_alive_points_kernel", reason);
+                    if (!scatter_timer.ok()) {
+                        return false;
+                    }
+                    compact_alive_points_kernel<<<ceil_div(total_candidates, kThreadsPerBlock), kThreadsPerBlock>>>(
+                        thrust::raw_pointer_cast(d_alive.data()),
+                        thrust::raw_pointer_cast(d_alive_prefix.data()),
+                        thrust::raw_pointer_cast(d_cand_points.data()),
+                        thrust::raw_pointer_cast(d_next_points.data()),
+                        total_candidates);
+                    if (!sync_kernel("compact_alive_points_kernel", reason)) {
+                        return false;
+                    }
+                    if (!scatter_timer.finish_and_add(stats != NULL ? &stats->kernel_expand_td_s : NULL,
+                                                      "cudaEventElapsedTime/compact_alive_points_kernel")) {
+                        return false;
+                    }
+                }
+            }
+        }
+    }
+
+    if (total_candidates_out != NULL) {
+        *total_candidates_out = layer_candidates;
+    }
+    if (std_candidates_out != NULL) {
+        *std_candidates_out = layer_candidates_std;
+    }
+    return true;
+}
+
+ParetoFrontier* enumerate_bdd_coupled(BDD* bdd,
+                                      bool maximization,
+                                      const int problem_type,
+                                      const int state_dominance,
+                                      EnumerationStats* stats,
+                                      std::string* reason) {
+    if (bdd == NULL) { set_reason(reason, "BDD is NULL"); return NULL; }
+    if (bdd->num_layers <= 0) { set_reason(reason, "BDD has zero layers"); return NULL; }
+    if (stats != NULL) {
+        stats->std_candidates_per_layer.clear();
+        stats->std_frontier_survivors_per_layer.clear();
+    }
+
+    const int num_layers = bdd->num_layers;
+
+    // 1. Pack all BDD layers into flat GPU arrays
+    const auto pack_begin = std::chrono::steady_clock::now();
+    std::vector<PackedBDDLayer> packed;
+    pack_bdd_layers(bdd, packed, true, true, problem_type, state_dominance, maximization);
+    if (stats != NULL) {
+        stats->wall_pack_transfer_s += std::chrono::duration_cast<std::chrono::duration<double> >(std::chrono::steady_clock::now() - pack_begin).count();
+    }
+
+    // 2. Initialize top-down and bottom-up frontiers
+    const int root_nodes = packed[0].num_nodes;
+    const int root_idx = bdd->get_root()->index;
+
+    thrust::host_vector<int> h_td_sizes(root_nodes, 0);
+    h_td_sizes[root_idx] = 1;
+    thrust::device_vector<int> d_td_sizes = h_td_sizes;
+    thrust::device_vector<int> d_td_offsets(root_nodes + 1, 0);
+    thrust::exclusive_scan(d_td_sizes.begin(), d_td_sizes.end(), d_td_offsets.begin());
+    d_td_offsets[root_nodes] = 1;
+    thrust::device_vector<ObjType> d_td_points(NOBJS, 0);
+
+    const int term_layer = num_layers - 1;
+    const int term_nodes = packed[term_layer].num_nodes;
+    const int term_idx = bdd->get_terminal()->index;
+
+    thrust::host_vector<int> h_bu_sizes(term_nodes, 0);
+    h_bu_sizes[term_idx] = 1;
+    thrust::device_vector<int> d_bu_sizes = h_bu_sizes;
+    thrust::device_vector<int> d_bu_offsets(term_nodes + 1, 0);
+    thrust::exclusive_scan(d_bu_sizes.begin(), d_bu_sizes.end(), d_bu_offsets.begin());
+    d_bu_offsets[term_nodes] = 1;
+    thrust::device_vector<ObjType> d_bu_points(NOBJS, 0);
+
+    // 3. Dynamic layer selection loop (all data stays on GPU)
+    int layer_td = 0;
+    int layer_bu = num_layers - 1;
+    int topdown_score = 0;
+    int bottomup_score = 0;
+
+    double total_td_time = 0.0, total_bu_time = 0.0;
+    int td_iters = 0, bu_iters = 0;
+    bool warned_non_knapsack_dominance = false;
+    const bool pack_knapsack_meta = (problem_type == 1 && state_dominance > 0);
+
+    while (layer_td != layer_bu) {
+        clock_t t0 = clock();
+        if (topdown_score <= bottomup_score) {
+            // Expand top-down
+            ++layer_td;
+            const int num_nodes = packed[layer_td].num_nodes;
+            thrust::device_vector<int> next_sizes(num_nodes, 0);
+            thrust::device_vector<int> next_offsets(num_nodes + 1, 0);
+            thrust::device_vector<ObjType> next_points;
+            long long layer_candidates = 0;
+            double layer_candidates_std = 0.0;
+
+            if (!topdown_expand_bdd_layer(
+                        packed[layer_td],
+                        d_td_offsets, d_td_points,
+                        next_sizes, next_offsets, next_points, reason,
+                        &layer_candidates, &layer_candidates_std,
+                        NULL, NULL, NULL,
+                        stats)) {
+                return NULL;
+            }
+
+            if (state_dominance > 0) {
+                LayerDominanceContext dom_ctx;
+                dom_ctx.next_sizes = &next_sizes;
+                dom_ctx.next_offsets = &next_offsets;
+                dom_ctx.next_points = &next_points;
+                dom_ctx.layer_min_weight = pack_knapsack_meta ? &packed[layer_td].min_weight : NULL;
+                dom_ctx.layer_single_parent_id = pack_knapsack_meta ? &packed[layer_td].single_parent_id : NULL;
+                dom_ctx.layer_single_parent_arc = pack_knapsack_meta ? &packed[layer_td].single_parent_arc : NULL;
+                dom_ctx.reason = reason;
+                dom_ctx.warned_non_knapsack = &warned_non_knapsack_dominance;
+                dom_ctx.failed = false;
+
+                g_layer_dom_ctx = &dom_ctx;
+                clock_t init = clock();
+                BDDMultiObj::filter_dominance_cuda(bdd, layer_td, problem_type, state_dominance, stats);
+                if (stats != NULL) {
+                    stats->cpu_state_dominance_s += static_cast<double>(clock() - init) / CLOCKS_PER_SEC;
+                }
+                g_layer_dom_ctx = NULL;
+
+                if (dom_ctx.failed) {
+                    return NULL;
+                }
+            }
+
+            clock_t t1 = clock();
+            double td_elapsed = (double)(t1-t0)/CLOCKS_PER_SEC;
+            total_td_time += td_elapsed;
+            ++td_iters;
+            if (stats != NULL) {
+                const long long layer_survivors = next_points.size() / NOBJS;
+                stats->work_candidates_total += layer_candidates;
+                stats->work_candidates_peak = std::max(stats->work_candidates_peak, layer_candidates);
+                stats->work_frontier_survivors_total += layer_survivors;
+                stats->work_frontier_peak_points = std::max(stats->work_frontier_peak_points, layer_survivors);
+            }
+
+            d_td_sizes.swap(next_sizes);
+            d_td_offsets.swap(next_offsets);
+            d_td_points.swap(next_points);
+
+            // Compute layer value on GPU
+            topdown_score = compute_expansion_score(d_td_offsets, packed[layer_td].out_arc_counts, num_nodes);
+        } else {
+            // Expand bottom-up
+            --layer_bu;
+            const int num_nodes = packed[layer_bu].num_nodes;
+            thrust::device_vector<int> next_sizes(num_nodes, 0);
+            thrust::device_vector<int> next_offsets(num_nodes + 1, 0);
+            thrust::device_vector<ObjType> next_points;
+            long long layer_candidates = 0;
+            double layer_candidates_std = 0.0;
+
+            if (!bottomup_expand_bdd_layer(
+                        packed[layer_bu],
+                        d_bu_offsets, d_bu_points,
+                        next_sizes, next_offsets, next_points, reason,
+                        &layer_candidates, &layer_candidates_std,
+                        NULL, NULL, NULL,
+                        stats)) {
+                return NULL;
+            }
+            clock_t t1 = clock();
+            double bu_elapsed = (double)(t1-t0)/CLOCKS_PER_SEC;
+            total_bu_time += bu_elapsed;
+            ++bu_iters;
+            if (stats != NULL) {
+                const long long layer_survivors = next_points.size() / NOBJS;
+                stats->work_candidates_total += layer_candidates;
+                stats->work_candidates_peak = std::max(stats->work_candidates_peak, layer_candidates);
+                stats->work_frontier_survivors_total += layer_survivors;
+                stats->work_frontier_peak_points = std::max(stats->work_frontier_peak_points, layer_survivors);
+            }
+
+            d_bu_sizes.swap(next_sizes);
+            d_bu_offsets.swap(next_offsets);
+            d_bu_points.swap(next_points);
+
+            // Compute layer value on GPU (with 1.5x multiplier)
+            bottomup_score = 1.5 * compute_expansion_score(d_bu_offsets, packed[layer_bu].in_arc_counts, num_nodes);
+        }
+    }
+
+    if (stats != NULL) stats->layer_coupling = layer_td;
+
+    // 4. Cutset coupling
+    return couple_bdd_cutsets(
+        packed[layer_td],
+        d_td_offsets, d_td_points,
+        d_bu_offsets, d_bu_points,
+        stats, reason);
+}
+
+

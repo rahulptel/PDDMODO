@@ -58,6 +58,9 @@ struct BDDMultiObj {
 
     // Find pareto frontier using dynamic layer cutset / CUDA
     static ParetoFrontier* pareto_frontier_dynamic_layer_cutset_cuda(MDD* mdd, EnumerationStats* stats = NULL, std::string* reason = NULL);
+
+    // Find pareto frontier using dynamic layer cutset / CUDA for BDD
+    static ParetoFrontier* pareto_frontier_dynamic_layer_cutset_cuda(BDD* bdd, bool maximization=true, const int problem_type=-1, const int state_dominance=0, EnumerationStats* stats = NULL, std::string* reason = NULL);
 };
 
 

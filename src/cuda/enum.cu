@@ -21,6 +21,13 @@ ParetoFrontier* enumerate_bdd_topdown(BDD* bdd,
                                       EnumerationStats* stats,
                                       std::string* reason);
 
+ParetoFrontier* enumerate_bdd_coupled(BDD* bdd,
+                                      bool maximization,
+                                      const int problem_type,
+                                      const int state_dominance,
+                                      EnumerationStats* stats,
+                                      std::string* reason);
+
 ParetoFrontier* enumerate_mdd_topdown(MDD* mdd,
                                       EnumerationStats* stats,
                                       std::string* reason);
@@ -88,6 +95,18 @@ ParetoFrontier* coupled_cuda_enumerate(MDD* mdd,
         return NULL;
     }
     return enumerate_mdd_coupled(mdd, stats, reason);
+}
+
+ParetoFrontier* coupled_cuda_enumerate(BDD* bdd,
+                                       bool maximization,
+                                       const int problem_type,
+                                       const int state_dominance,
+                                       EnumerationStats* stats,
+                                       std::string* reason) {
+    if (!prepare_cuda_device(reason)) {
+        return NULL;
+    }
+    return enumerate_bdd_coupled(bdd, maximization, problem_type, state_dominance, stats, reason);
 }
 
 // ----------------------------------------------------------
@@ -161,6 +180,151 @@ void pack_mdd_layers(MDD* mdd, std::vector<PackedMDDLayer>& packed, bool pack_bo
             for (int d = 0; d < num_nodes; ++d) {
                 h_out[d] = mdd->layers[l][d]->out_arcs_list.size();
                 h_in[d] = mdd->layers[l][d]->in_arcs_list.size();
+            }
+            packed[l].out_arc_counts = h_out;
+            packed[l].in_arc_counts = h_in;
+        }
+    }
+}
+
+// ----------------------------------------------------------
+// BDD Packing Helper Implementation
+// ----------------------------------------------------------
+
+void pack_bdd_layers(BDD* bdd,
+                     std::vector<PackedBDDLayer>& packed,
+                     bool pack_bottom_up,
+                     bool pack_heuristic,
+                     const int problem_type,
+                     const int state_dominance,
+                     bool maximization) {
+    const int num_layers = bdd->num_layers;
+    packed.resize(num_layers);
+
+    const int first_arc_type = maximization ? 1 : 0;
+    const int second_arc_type = maximization ? 0 : 1;
+    const bool pack_knapsack_meta = (problem_type == 1 && state_dominance > 0);
+
+    for (int l = 0; l < num_layers; ++l) {
+        const int num_nodes = bdd->layers[l].size();
+        packed[l].num_nodes = num_nodes;
+
+        // Top-down: incoming transitions
+        if (l > 0) {
+            std::vector<int> h_off(num_nodes + 1, 0);
+            for (int d = 0; d < num_nodes; ++d) {
+                Node* dst_node = bdd->layers[l][d];
+                int count = dst_node->prev[first_arc_type].size() + dst_node->prev[second_arc_type].size();
+                h_off[d + 1] = h_off[d] + count;
+            }
+            const int num_edges = h_off[num_nodes];
+            std::vector<int> h_src(num_edges);
+            std::vector<ObjType> h_wt(num_edges * NOBJS);
+
+            std::vector<int> h_min_weight;
+            std::vector<int> h_parent_id;
+            std::vector<int> h_parent_arc;
+            if (pack_knapsack_meta) {
+                h_min_weight.resize(num_nodes);
+                h_parent_id.resize(num_nodes);
+                h_parent_arc.resize(num_nodes);
+            }
+
+            int idx = 0;
+            const int arc_order[2] = {first_arc_type, second_arc_type};
+            for (int d = 0; d < num_nodes; ++d) {
+                Node* dst_node = bdd->layers[l][d];
+                for (int arc_pos = 0; arc_pos < 2; ++arc_pos) {
+                    const int arc_type = arc_order[arc_pos];
+                    for (size_t p = 0; p < dst_node->prev[arc_type].size(); ++p) {
+                        Node* src_node = dst_node->prev[arc_type][p];
+                        h_src[idx] = src_node->index;
+                        ObjType* w = src_node->weights[arc_type];
+                        for (int o = 0; o < NOBJS; ++o) {
+                            h_wt[idx * NOBJS + o] = (w != NULL ? w[o] : 0);
+                        }
+                        ++idx;
+                    }
+                }
+
+                if (pack_knapsack_meta) {
+                    h_min_weight[d] = dst_node->min_weight;
+                    const int parents_total = dst_node->prev[0].size() + dst_node->prev[1].size();
+                    if (parents_total == 1) {
+                        if (dst_node->prev[0].size() == 1) {
+                            h_parent_id[d] = dst_node->prev[0][0]->index;
+                            h_parent_arc[d] = 0;
+                        } else {
+                            h_parent_id[d] = dst_node->prev[1][0]->index;
+                            h_parent_arc[d] = 1;
+                        }
+                    } else {
+                        h_parent_id[d] = -1;
+                        h_parent_arc[d] = -1;
+                    }
+                }
+            }
+
+            packed[l].td_num_edges = num_edges;
+            packed[l].td_in_edge_offsets = h_off;
+            packed[l].td_edge_src = h_src;
+            packed[l].td_edge_weights = h_wt;
+            if (pack_knapsack_meta) {
+                packed[l].min_weight = h_min_weight;
+                packed[l].single_parent_id = h_parent_id;
+                packed[l].single_parent_arc = h_parent_arc;
+            }
+        } else {
+            packed[l].td_num_edges = 0;
+        }
+
+        // Bottom-up: outgoing transitions
+        if (pack_bottom_up && l < num_layers - 1) {
+            std::vector<int> h_off(num_nodes + 1, 0);
+            for (int d = 0; d < num_nodes; ++d) {
+                Node* src_node = bdd->layers[l][d];
+                int count = 0;
+                if (src_node->arcs[first_arc_type] != NULL) ++count;
+                if (src_node->arcs[second_arc_type] != NULL) ++count;
+                h_off[d + 1] = h_off[d] + count;
+            }
+            const int num_edges = h_off[num_nodes];
+            std::vector<int> h_dst(num_edges);
+            std::vector<ObjType> h_wt(num_edges * NOBJS);
+
+            int idx = 0;
+            const int arc_order[2] = {first_arc_type, second_arc_type};
+            for (int d = 0; d < num_nodes; ++d) {
+                Node* src_node = bdd->layers[l][d];
+                for (int arc_pos = 0; arc_pos < 2; ++arc_pos) {
+                    const int arc_type = arc_order[arc_pos];
+                    Node* dst_node = src_node->arcs[arc_type];
+                    if (dst_node != NULL) {
+                        h_dst[idx] = dst_node->index;
+                        ObjType* w = src_node->weights[arc_type];
+                        for (int o = 0; o < NOBJS; ++o) {
+                            h_wt[idx * NOBJS + o] = (w != NULL ? w[o] : 0);
+                        }
+                        ++idx;
+                    }
+                }
+            }
+
+            packed[l].bu_num_edges = num_edges;
+            packed[l].bu_out_edge_offsets = h_off;
+            packed[l].bu_edge_dst = h_dst;
+            packed[l].bu_edge_weights = h_wt;
+        } else {
+            packed[l].bu_num_edges = 0;
+        }
+
+        // Heuristic arc counts
+        if (pack_heuristic) {
+            std::vector<int> h_out(num_nodes, 0), h_in(num_nodes, 0);
+            for (int d = 0; d < num_nodes; ++d) {
+                Node* node = bdd->layers[l][d];
+                h_in[d] = node->prev[0].size() + node->prev[1].size();
+                h_out[d] = (node->arcs[0] != NULL ? 1 : 0) + (node->arcs[1] != NULL ? 1 : 0);
             }
             packed[l].out_arc_counts = h_out;
             packed[l].in_arc_counts = h_in;

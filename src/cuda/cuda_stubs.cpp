@@ -35,3 +35,15 @@ ParetoFrontier* coupled_cuda_enumerate(MDD* mdd, EnumerationStats* stats, std::s
     }
     return NULL;
 }
+
+ParetoFrontier* coupled_cuda_enumerate(BDD* bdd, bool maximization, const int problem_type, const int state_dominance, EnumerationStats* stats, std::string* reason) {
+    (void)bdd;
+    (void)maximization;
+    (void)problem_type;
+    (void)state_dominance;
+    (void)stats;
+    if (reason != NULL) {
+        *reason = "GPU backend requested but binary was built without CUDA support";
+    }
+    return NULL;
+}

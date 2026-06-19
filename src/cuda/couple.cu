@@ -487,3 +487,250 @@ ParetoFrontier* couple_mdd_cutsets(
     if (reason) reason->clear();
     return frontier;
 }
+
+ParetoFrontier* couple_bdd_cutsets(
+    const PackedBDDLayer& packed_layer,
+    const thrust::device_vector<int>& d_td_offsets,
+    const thrust::device_vector<ObjType>& d_td_points,
+    const thrust::device_vector<int>& d_bu_offsets,
+    const thrust::device_vector<ObjType>& d_bu_points,
+    EnumerationStats* stats,
+    std::string* reason) {
+
+    clock_t t0 = clock();
+    const int cutset_nodes = packed_layer.num_nodes;
+
+    thrust::host_vector<int> h_td_off = d_td_offsets;
+    thrust::host_vector<int> h_bu_off = d_bu_offsets;
+
+    long long total_products = 0;
+    for (int i = 0; i < cutset_nodes; ++i) {
+        int ts = h_td_off[i+1] - h_td_off[i];
+        int bs = h_bu_off[i+1] - h_bu_off[i];
+        long long p = (long long)ts * bs;
+        total_products += p;
+    }
+    if (stats != NULL) {
+        stats->work_join_products_total += total_products;
+    }
+
+    // Collect nonzero nodes and sort on device by CPU-like cutset priority:
+    // td frontier size + bu frontier size (largest first).
+    thrust::device_vector<int> d_all_nodes(cutset_nodes);
+    thrust::copy(
+        thrust::counting_iterator<int>(0),
+        thrust::counting_iterator<int>(cutset_nodes),
+        d_all_nodes.begin());
+
+    thrust::device_vector<int> d_nz_nodes(cutset_nodes);
+    HasBothFrontiers has_both{
+        thrust::raw_pointer_cast(d_td_offsets.data()),
+        thrust::raw_pointer_cast(d_bu_offsets.data())
+    };
+    auto nz_end = thrust::copy_if(
+        d_all_nodes.begin(),
+        d_all_nodes.end(),
+        d_nz_nodes.begin(),
+        has_both);
+    d_nz_nodes.resize(static_cast<int>(nz_end - d_nz_nodes.begin()));
+
+    thrust::device_vector<long long> d_nz_scores(d_nz_nodes.size());
+    FrontierSumScore score_fn{
+        thrust::raw_pointer_cast(d_td_offsets.data()),
+        thrust::raw_pointer_cast(d_bu_offsets.data())
+    };
+    thrust::transform(d_nz_nodes.begin(), d_nz_nodes.end(), d_nz_scores.begin(), score_fn);
+    thrust::sort_by_key(d_nz_scores.begin(), d_nz_scores.end(), d_nz_nodes.begin(), thrust::greater<long long>());
+
+    thrust::host_vector<int> h_nz_nodes = d_nz_nodes;
+    std::vector<int> nz_nodes(h_nz_nodes.begin(), h_nz_nodes.end());
+
+    // Running frontier stored on device
+    thrust::device_vector<ObjType> d_frontier_pts;
+    int frontier_size = 0;
+
+    const long long MAX_BATCH_PRODUCTS = 2000000LL;
+    double time_cart = 0, time_filt = 0, time_update = 0;
+    int num_batches = 0;
+
+    int batch_begin = 0;
+    while (batch_begin < (int)nz_nodes.size()) {
+        // Determine batch bounds
+        long long bprod_total = 0;
+        int batch_end = batch_begin;
+        while (batch_end < (int)nz_nodes.size()) {
+            int ni = nz_nodes[batch_end];
+            long long p = (long long)(h_td_off[ni+1]-h_td_off[ni]) * (h_bu_off[ni+1]-h_bu_off[ni]);
+            if (bprod_total + p > MAX_BATCH_PRODUCTS && bprod_total > 0) break;
+            bprod_total += p;
+            ++batch_end;
+        }
+        if (bprod_total == 0) { batch_begin = batch_end; continue; }
+        const int batch_node_count = batch_end - batch_begin;
+
+        // Build batch metadata on host
+        std::vector<int> h_btd_off(batch_node_count), h_bbu_off(batch_node_count), h_btd_sz(batch_node_count), h_bbu_sz(batch_node_count);
+        std::vector<int> h_bprod_off(batch_node_count + 1, 0);
+        for (int j = 0; j < batch_node_count; ++j) {
+            int ni = nz_nodes[batch_begin + j];
+            h_btd_off[j] = h_td_off[ni];
+            h_bbu_off[j] = h_bu_off[ni];
+            h_btd_sz[j]  = h_td_off[ni+1] - h_td_off[ni];
+            h_bbu_sz[j]  = h_bu_off[ni+1] - h_bu_off[ni];
+            h_bprod_off[j+1] = h_bprod_off[j] + h_btd_sz[j] * h_bbu_sz[j];
+        }
+        const int batch_product_count = h_bprod_off[batch_node_count];
+        if (stats != NULL) {
+            stats->work_candidates_total += batch_product_count;
+        }
+
+        // Upload batch metadata
+        thrust::device_vector<int> d_btd_off(h_btd_off.begin(), h_btd_off.end());
+        thrust::device_vector<int> d_bbu_off(h_bbu_off.begin(), h_bbu_off.end());
+        thrust::device_vector<int> d_btd_sz(h_btd_sz.begin(), h_btd_sz.end());
+        thrust::device_vector<int> d_bbu_sz(h_bbu_sz.begin(), h_bbu_sz.end());
+        thrust::device_vector<int> d_bprod_off(h_bprod_off.begin(), h_bprod_off.end());
+
+        // ---- A: Cartesian product ----
+        clock_t ca = clock();
+        thrust::device_vector<ObjType> d_bpts(batch_product_count * NOBJS, 0);
+        materialize_cutset_products_kernel<<<batch_node_count, kThreadsPerBlock>>>(
+            thrust::raw_pointer_cast(d_td_points.data()),
+            thrust::raw_pointer_cast(d_btd_off.data()),
+            thrust::raw_pointer_cast(d_bu_points.data()),
+            thrust::raw_pointer_cast(d_bbu_off.data()),
+            thrust::raw_pointer_cast(d_btd_sz.data()),
+            thrust::raw_pointer_cast(d_bbu_sz.data()),
+            thrust::raw_pointer_cast(d_bprod_off.data()),
+            batch_node_count,
+            thrust::raw_pointer_cast(d_bpts.data()));
+        if (!sync_kernel("cart_batch", reason)) return NULL;
+        time_cart += (double)(clock()-ca)/CLOCKS_PER_SEC;
+
+        // ---- B: Filter batch against frontier ----
+        clock_t fa = clock();
+        int batch_surv = batch_product_count;
+        thrust::device_vector<ObjType> d_surv;
+
+        if (frontier_size > 0 && batch_product_count > 0) {
+            // Kill batch points dominated by any frontier point.
+            thrust::device_vector<int> d_alive_f(batch_product_count, 0);
+            mark_dominated_by_frontier_kernel<<<ceil_div(batch_product_count, kThreadsPerBlock), kThreadsPerBlock>>>(
+                thrust::raw_pointer_cast(d_bpts.data()), batch_product_count,
+                thrust::raw_pointer_cast(d_frontier_pts.data()), frontier_size,
+                thrust::raw_pointer_cast(d_alive_f.data()));
+            if (!sync_kernel("filt_frontier", reason)) return NULL;
+
+            thrust::device_vector<int> d_pfx_f(batch_product_count, 0);
+            thrust::exclusive_scan(d_alive_f.begin(), d_alive_f.end(), d_pfx_f.begin());
+            batch_surv = thrust::reduce(d_alive_f.begin(), d_alive_f.end(), 0);
+
+            if (batch_surv > 0) {
+                d_surv.resize(batch_surv * NOBJS);
+                compact_alive_points_kernel<<<ceil_div(batch_product_count, kThreadsPerBlock), kThreadsPerBlock>>>(
+                    thrust::raw_pointer_cast(d_alive_f.data()),
+                    thrust::raw_pointer_cast(d_pfx_f.data()),
+                    thrust::raw_pointer_cast(d_bpts.data()),
+                    thrust::raw_pointer_cast(d_surv.data()), batch_product_count);
+                if (!sync_kernel("scatter_filt", reason)) return NULL;
+            }
+        } else {
+            d_surv = d_bpts;
+            batch_surv = batch_product_count;
+        }
+        time_filt += (double)(clock()-fa)/CLOCKS_PER_SEC;
+
+        // ---- C: Update frontier: remove dominated points, append survivors ----
+        clock_t ua = clock();
+        if (batch_surv > 0) {
+            // Remove frontier points dominated by any batch survivor
+            int kept_frontier = frontier_size;
+            if (frontier_size > 0) {
+                thrust::device_vector<int> d_alive_old(frontier_size, 0);
+                mark_frontier_dominated_by_batch_kernel<<<ceil_div(frontier_size, kThreadsPerBlock), kThreadsPerBlock>>>(
+                    thrust::raw_pointer_cast(d_frontier_pts.data()), frontier_size,
+                    thrust::raw_pointer_cast(d_surv.data()), batch_surv,
+                    thrust::raw_pointer_cast(d_alive_old.data()));
+                if (!sync_kernel("old_dom", reason)) return NULL;
+
+                kept_frontier = thrust::reduce(d_alive_old.begin(), d_alive_old.end(), 0);
+
+                if (kept_frontier < frontier_size) {
+                    thrust::device_vector<int> d_pfx_old(frontier_size, 0);
+                    thrust::exclusive_scan(d_alive_old.begin(), d_alive_old.end(), d_pfx_old.begin());
+                    thrust::device_vector<ObjType> d_kept(kept_frontier * NOBJS);
+                    compact_alive_points_kernel<<<ceil_div(frontier_size, kThreadsPerBlock), kThreadsPerBlock>>>(
+                        thrust::raw_pointer_cast(d_alive_old.data()),
+                        thrust::raw_pointer_cast(d_pfx_old.data()),
+                        thrust::raw_pointer_cast(d_frontier_pts.data()),
+                        thrust::raw_pointer_cast(d_kept.data()), frontier_size);
+                    if (!sync_kernel("scatter_kept", reason)) return NULL;
+                    d_frontier_pts.swap(d_kept);
+                }
+            }
+
+            // Append batch survivors to frontier
+            int new_total = kept_frontier + batch_surv;
+            d_frontier_pts.resize(new_total * NOBJS);
+            thrust::copy_n(d_surv.begin(), batch_surv * NOBJS,
+                           d_frontier_pts.begin() + kept_frontier * NOBJS);
+            frontier_size = new_total;
+        }
+        time_update += (double)(clock()-ua)/CLOCKS_PER_SEC;
+        if (stats != NULL) {
+            stats->work_frontier_survivors_total += batch_surv;
+            stats->work_frontier_peak_points = std::max(stats->work_frontier_peak_points, static_cast<long long>(frontier_size));
+        }
+
+        ++num_batches;
+        batch_begin = batch_end;
+    }
+    clock_t t1 = clock();
+    if (stats != NULL) {
+        stats->wall_join_s += (double)(t1-t0)/CLOCKS_PER_SEC;
+    }
+
+    // ---- Final global dominance pass on accumulated frontier ----
+    clock_t fg0 = clock();
+    if (frontier_size > 1) {
+        thrust::device_vector<int> d_alive_final(frontier_size, 0);
+        mark_globally_dominated_kernel<<<ceil_div(frontier_size, kThreadsPerBlock), kThreadsPerBlock>>>(
+            thrust::raw_pointer_cast(d_frontier_pts.data()), frontier_size,
+            thrust::raw_pointer_cast(d_alive_final.data()));
+        if (!sync_kernel("final_dom", reason)) return NULL;
+
+        thrust::device_vector<int> d_pfx_final(frontier_size, 0);
+        thrust::exclusive_scan(d_alive_final.begin(), d_alive_final.end(), d_pfx_final.begin());
+        int final_size = thrust::reduce(d_alive_final.begin(), d_alive_final.end(), 0);
+
+        if (final_size < frontier_size) {
+            thrust::device_vector<ObjType> d_final(final_size * NOBJS);
+            compact_alive_points_kernel<<<ceil_div(frontier_size, kThreadsPerBlock), kThreadsPerBlock>>>(
+                thrust::raw_pointer_cast(d_alive_final.data()),
+                thrust::raw_pointer_cast(d_pfx_final.data()),
+                thrust::raw_pointer_cast(d_frontier_pts.data()),
+                thrust::raw_pointer_cast(d_final.data()), frontier_size);
+            if (!sync_kernel("scatter_final", reason)) return NULL;
+            d_frontier_pts.swap(d_final);
+            frontier_size = final_size;
+        }
+    }
+    clock_t fg1 = clock();
+    if (stats != NULL) {
+        stats->wall_join_s += (double)(fg1-fg0)/CLOCKS_PER_SEC;
+        stats->work_frontier_peak_points = std::max(stats->work_frontier_peak_points, static_cast<long long>(frontier_size));
+    }
+
+    // Copy final frontier to host
+    ParetoFrontier* frontier = new ParetoFrontier;
+    frontier->sols.resize(frontier_size * NOBJS, 0);
+    if (frontier_size > 0) {
+        thrust::host_vector<ObjType> h_res(d_frontier_pts.begin(),
+                                           d_frontier_pts.begin() + frontier_size * NOBJS);
+        std::copy(h_res.begin(), h_res.end(), frontier->sols.begin());
+    }
+
+    if (reason) reason->clear();
+    return frontier;
+}
+
