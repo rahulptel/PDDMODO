@@ -14,6 +14,7 @@
 #include <cuda_runtime.h>
 
 #include "../bdd/bdd_multiobj.hpp"
+#include "dominance_utils.cuh"
 #include "topdown_cuda.hpp"
 
 #include <thrust/device_vector.h>
@@ -204,22 +205,6 @@ __device__ int find_dst_node(int block_idx, const int* block_offsets, int next_n
         }
     }
     return low;
-}
-
-__device__ __forceinline__ bool dominates_or_tie_before(const ObjType* lhs,
-                                                        const ObjType* rhs,
-                                                        bool tie_before) {
-    bool strict = false;
-    #pragma unroll
-    for (int o = 0; o < NOBJS; ++o) {
-        const ObjType a = lhs[o];
-        const ObjType b = rhs[o];
-        if (a < b) {
-            return false;
-        }
-        strict = strict || (a > b);
-    }
-    return strict || tie_before;
 }
 
 // mark_dominated_1d_kernel uses a strictly load balanced 1D grid.
