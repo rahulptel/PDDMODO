@@ -1,8 +1,8 @@
 // ----------------------------------------------------------
-// CUDA Top-Down Enumeration for BDD - Implementation
+// CUDA Top-Down Enumeration - Implementation
 // ----------------------------------------------------------
 
-#include "topdown_cuda.hpp"
+#include "enum_types.cuh"
 
 #include <algorithm>
 #include <chrono>
@@ -699,20 +699,7 @@ void BDDMultiObj::filter_dominance_knapsack_cuda(BDD* bdd, const int layer, Enum
 }
 
 
-bool topdown_cuda_available(std::string* reason) {
-    int device_count = 0;
-    cudaError_t err = cudaGetDeviceCount(&device_count);
-    if (err != cudaSuccess) {
-        return set_reason(reason, std::string("cudaGetDeviceCount failed: ") + cudaGetErrorString(err));
-    }
-    if (device_count <= 0) {
-        return set_reason(reason, "No CUDA device found");
-    }
-    return true;
-}
-
-
-ParetoFrontier* topdown_cuda_enumerate(BDD* bdd,
+ParetoFrontier* bdd_topdown_cuda_enumerate_impl(BDD* bdd,
                                        bool maximization,
                                        const int problem_type,
                                        const int state_dominance,
@@ -724,12 +711,6 @@ ParetoFrontier* topdown_cuda_enumerate(BDD* bdd,
     }
     if (bdd->num_layers <= 0) {
         set_reason(reason, "BDD has zero layers");
-        return NULL;
-    }
-    if (!topdown_cuda_available(reason)) {
-        return NULL;
-    }
-    if (!cuda_ok(cudaSetDevice(0), "cudaSetDevice", reason)) {
         return NULL;
     }
     long long gpu_mem_baseline_used_bytes = 0;
@@ -1273,13 +1254,11 @@ ParetoFrontier* topdown_cuda_enumerate(BDD* bdd,
 // MDD GPU Top-Down Enumeration
 // ---------------------------------------------------------------
 
-ParetoFrontier* topdown_mdd_cuda_enumerate(MDD* mdd,
+ParetoFrontier* mdd_topdown_cuda_enumerate_impl(MDD* mdd,
                                            EnumerationStats* stats,
                                            std::string* reason) {
     if (mdd == NULL) { set_reason(reason, "MDD is NULL"); return NULL; }
     if (mdd->num_layers <= 0) { set_reason(reason, "MDD has zero layers"); return NULL; }
-    if (!topdown_cuda_available(reason)) return NULL;
-    if (!cuda_ok(cudaSetDevice(0), "cudaSetDevice", reason)) return NULL;
     long long gpu_mem_baseline_used_bytes = 0;
     long long gpu_mem_peak_used_bytes = 0;
     long long gpu_mem_peak_reserved_bytes = 0;

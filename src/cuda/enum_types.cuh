@@ -1,42 +1,17 @@
 // ----------------------------------------------------------
-// CUDA Top-Down Enumeration for BDD
+// Shared CUDA enumeration types and layer expansion API
 // ----------------------------------------------------------
 
-#ifndef TOPDOWN_CUDA_HPP_
-#define TOPDOWN_CUDA_HPP_
+#ifndef CUDA_ENUM_TYPES_CUH_
+#define CUDA_ENUM_TYPES_CUH_
 
 #include <string>
 
-#include "../bdd/bdd.hpp"
-#include "../mdd/mdd.hpp"
-#include "../bdd/pareto_frontier.hpp"
 #include <thrust/device_vector.h>
 
+#include "../util/util.hpp"
+
 struct EnumerationStats;
-using MultiObjectiveStats = EnumerationStats;
-
-// Checks whether at least one CUDA device is available.
-bool topdown_cuda_available(std::string* reason);
-
-// Runs top-down frontier enumeration on CUDA for BDDs.
-// Returns NULL on failure and fills reason when provided.
-// CUDA uses dynamic blocks per node with binary-search destination lookup.
-ParetoFrontier* topdown_cuda_enumerate(BDD* bdd,
-                                       bool maximization,
-                                       const int problem_type,
-                                       const int state_dominance,
-                                       EnumerationStats* stats,
-                                       std::string* reason);
-
-// Runs top-down frontier enumeration on CUDA for MDDs.
-// Returns NULL on failure and fills reason when provided.
-ParetoFrontier* topdown_mdd_cuda_enumerate(MDD* mdd,
-                                           EnumerationStats* stats,
-                                           std::string* reason);
-
-// ---------------------------------------------------------------
-// Shared MDD CUDA definitions used by both top-down and coupled approaches
-// ---------------------------------------------------------------
 
 // Flat representation of one MDD layer's connectivity, on device.
 struct PackedMDDLayer {
@@ -61,12 +36,10 @@ struct PackedMDDLayer {
     thrust::device_vector<int> in_arc_counts;
 };
 
-// Computes the node counts for the heuristic.
 int compute_layer_value(const thrust::device_vector<int>& offsets,
                         const thrust::device_vector<int>& arc_counts,
                         int num_nodes);
 
-// Expands a layer in CUDA (either top-down or bottom-up).
 bool expand_layer_cuda(
     const thrust::device_vector<int>& in_edge_offsets,
     const thrust::device_vector<int>& edge_src,
