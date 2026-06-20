@@ -146,10 +146,10 @@ __global__ void mark_globally_dominated_kernel(const ObjType* points,
     if (valid) alive[i] = dom ? 0 : 1;
 }
 
-// Filter candidates against a separate frontier:
-// for each candidate, check if any frontier point dominates it.
-// alive[i] = 0 if frontier dominates candidate i, else 1.
-__global__ void mark_dominated_by_frontier_kernel(
+// Like mark_dominated_by_frontier_kernel, but equality also removes candidates.
+// This keeps duplicates from being appended when two already-clean frontiers are
+// merged and an identical point exists in the old frontier.
+__global__ void mark_dominated_or_equal_by_frontier_kernel(
     const ObjType* candidates, int num_cand,
     const ObjType* frontier, int num_frontier,
     int* alive)
@@ -176,13 +176,12 @@ __global__ void mark_dominated_by_frontier_kernel(
         if (valid && !dom) {
             const int tc = min(num_frontier - jb, (int)blockDim.x);
             for (int jj = 0; jj < tc && !dom; ++jj) {
-                bool ge = true, strict = false;
+                bool ge = true;
                 #pragma unroll
                 for (int o = 0; o < NOBJS; ++o) {
                     ge = ge && (sh[jj * NOBJS + o] >= ci[o]);
-                    strict = strict || (sh[jj * NOBJS + o] > ci[o]);
                 }
-                if (ge && strict) dom = true;
+                if (ge) dom = true;
             }
         }
         __syncthreads();
@@ -234,6 +233,127 @@ __global__ void mark_frontier_dominated_by_batch_kernel(
 }
 
 // Removed functors for global sorting since they break edge_offsets mapping
+
+bool compact_points_by_alive(thrust::device_vector<ObjType>& points,
+                             int& num_points,
+                             const thrust::device_vector<int>& alive,
+                             int live_points,
+                             const char* kernel_name,
+                             std::string* reason) {
+    if (live_points == num_points) {
+        return true;
+    }
+
+    thrust::device_vector<int> prefix(num_points, 0);
+    thrust::exclusive_scan(alive.begin(), alive.end(), prefix.begin());
+
+    thrust::device_vector<ObjType> compacted(live_points * NOBJS);
+    if (live_points > 0) {
+        compact_alive_points_kernel<<<ceil_div(num_points, kThreadsPerBlock), kThreadsPerBlock>>>(
+            thrust::raw_pointer_cast(alive.data()),
+            thrust::raw_pointer_cast(prefix.data()),
+            thrust::raw_pointer_cast(points.data()),
+            thrust::raw_pointer_cast(compacted.data()),
+            num_points);
+        if (!sync_kernel(kernel_name, reason)) return false;
+    }
+
+    points.swap(compacted);
+    num_points = live_points;
+    return true;
+}
+
+bool self_prune_points(thrust::device_vector<ObjType>& points,
+                       int& num_points,
+                       std::string* reason) {
+    if (num_points <= 1) {
+        return true;
+    }
+
+    thrust::device_vector<int> alive(num_points, 0);
+    mark_globally_dominated_kernel<<<ceil_div(num_points, kThreadsPerBlock), kThreadsPerBlock>>>(
+        thrust::raw_pointer_cast(points.data()),
+        num_points,
+        thrust::raw_pointer_cast(alive.data()));
+    if (!sync_kernel("local_self_prune", reason)) return false;
+
+    const int live_points = thrust::reduce(alive.begin(), alive.end(), 0);
+    return compact_points_by_alive(points,
+                                   num_points,
+                                   alive,
+                                   live_points,
+                                   "local_self_prune_compact",
+                                   reason);
+}
+
+bool merge_clean_points_into_frontier(thrust::device_vector<ObjType>& frontier,
+                                      int& frontier_size,
+                                      thrust::device_vector<ObjType>& incoming,
+                                      int& incoming_size,
+                                      std::string* reason) {
+    if (incoming_size <= 0) {
+        return true;
+    }
+
+    if (frontier_size <= 0) {
+        frontier.swap(incoming);
+        frontier_size = incoming_size;
+        incoming_size = 0;
+        return true;
+    }
+
+    thrust::device_vector<int> alive_new(incoming_size, 0);
+    mark_dominated_or_equal_by_frontier_kernel<<<ceil_div(incoming_size, kThreadsPerBlock), kThreadsPerBlock>>>(
+        thrust::raw_pointer_cast(incoming.data()),
+        incoming_size,
+        thrust::raw_pointer_cast(frontier.data()),
+        frontier_size,
+        thrust::raw_pointer_cast(alive_new.data()));
+    if (!sync_kernel("merge_filter_new", reason)) return false;
+
+    const int kept_new = thrust::reduce(alive_new.begin(), alive_new.end(), 0);
+    if (!compact_points_by_alive(incoming,
+                                 incoming_size,
+                                 alive_new,
+                                 kept_new,
+                                 "merge_compact_new",
+                                 reason)) {
+        return false;
+    }
+    if (incoming_size <= 0) {
+        return true;
+    }
+
+    int kept_frontier = frontier_size;
+    thrust::device_vector<int> alive_old(frontier_size, 0);
+    mark_frontier_dominated_by_batch_kernel<<<ceil_div(frontier_size, kThreadsPerBlock), kThreadsPerBlock>>>(
+        thrust::raw_pointer_cast(frontier.data()),
+        frontier_size,
+        thrust::raw_pointer_cast(incoming.data()),
+        incoming_size,
+        thrust::raw_pointer_cast(alive_old.data()));
+    if (!sync_kernel("merge_filter_old", reason)) return false;
+
+    kept_frontier = thrust::reduce(alive_old.begin(), alive_old.end(), 0);
+    if (!compact_points_by_alive(frontier,
+                                 frontier_size,
+                                 alive_old,
+                                 kept_frontier,
+                                 "merge_compact_old",
+                                 reason)) {
+        return false;
+    }
+
+    const int new_total = frontier_size + incoming_size;
+    frontier.resize(new_total * NOBJS);
+    thrust::copy_n(incoming.begin(),
+                   incoming_size * NOBJS,
+                   frontier.begin() + frontier_size * NOBJS);
+    frontier_size = new_total;
+    incoming.clear();
+    incoming_size = 0;
+    return true;
+}
 
 } // anonymous namespace
 
@@ -303,51 +423,50 @@ ParetoFrontier* couple_mdd_cutsets(
     thrust::device_vector<ObjType> d_frontier_pts;
     int frontier_size = 0;
 
-    const long long MAX_BATCH_PRODUCTS = 2000000LL;
-    double time_cart = 0, time_filt = 0, time_update = 0;
-    int num_batches = 0;
+    const long long MAX_BATCH_PRODUCTS = 625000LL;
 
     int batch_begin = 0;
-    while (batch_begin < (int)nz_nodes.size()) {
-        // Determine batch bounds
+    while (batch_begin < static_cast<int>(nz_nodes.size())) {
         long long bprod_total = 0;
         int batch_end = batch_begin;
-        while (batch_end < (int)nz_nodes.size()) {
-            int ni = nz_nodes[batch_end];
-            long long p = (long long)(h_td_off[ni+1]-h_td_off[ni]) * (h_bu_off[ni+1]-h_bu_off[ni]);
+        while (batch_end < static_cast<int>(nz_nodes.size())) {
+            const int ni = nz_nodes[batch_end];
+            const long long p = static_cast<long long>(h_td_off[ni + 1] - h_td_off[ni]) *
+                                static_cast<long long>(h_bu_off[ni + 1] - h_bu_off[ni]);
             if (bprod_total + p > MAX_BATCH_PRODUCTS && bprod_total > 0) break;
             bprod_total += p;
             ++batch_end;
         }
-        if (bprod_total == 0) { batch_begin = batch_end; continue; }
-        const int batch_node_count = batch_end - batch_begin;
+        if (bprod_total == 0) {
+            batch_begin = batch_end;
+            continue;
+        }
 
-        // Build batch metadata on host
-        std::vector<int> h_btd_off(batch_node_count), h_bbu_off(batch_node_count), h_btd_sz(batch_node_count), h_bbu_sz(batch_node_count);
+        const int batch_node_count = batch_end - batch_begin;
+        std::vector<int> h_btd_off(batch_node_count), h_bbu_off(batch_node_count);
+        std::vector<int> h_btd_sz(batch_node_count), h_bbu_sz(batch_node_count);
         std::vector<int> h_bprod_off(batch_node_count + 1, 0);
         for (int j = 0; j < batch_node_count; ++j) {
-            int ni = nz_nodes[batch_begin + j];
+            const int ni = nz_nodes[batch_begin + j];
             h_btd_off[j] = h_td_off[ni];
             h_bbu_off[j] = h_bu_off[ni];
-            h_btd_sz[j]  = h_td_off[ni+1] - h_td_off[ni];
-            h_bbu_sz[j]  = h_bu_off[ni+1] - h_bu_off[ni];
-            h_bprod_off[j+1] = h_bprod_off[j] + h_btd_sz[j] * h_bbu_sz[j];
+            h_btd_sz[j] = h_td_off[ni + 1] - h_td_off[ni];
+            h_bbu_sz[j] = h_bu_off[ni + 1] - h_bu_off[ni];
+            h_bprod_off[j + 1] = h_bprod_off[j] + h_btd_sz[j] * h_bbu_sz[j];
         }
+
         const int batch_product_count = h_bprod_off[batch_node_count];
         if (stats != NULL) {
             stats->work_candidates_total += batch_product_count;
         }
 
-        // Upload batch metadata
         thrust::device_vector<int> d_btd_off(h_btd_off.begin(), h_btd_off.end());
         thrust::device_vector<int> d_bbu_off(h_bbu_off.begin(), h_bbu_off.end());
         thrust::device_vector<int> d_btd_sz(h_btd_sz.begin(), h_btd_sz.end());
         thrust::device_vector<int> d_bbu_sz(h_bbu_sz.begin(), h_bbu_sz.end());
         thrust::device_vector<int> d_bprod_off(h_bprod_off.begin(), h_bprod_off.end());
 
-        // ---- A: Cartesian product ----
-        clock_t ca = clock();
-        thrust::device_vector<ObjType> d_bpts(batch_product_count * NOBJS, 0);
+        thrust::device_vector<ObjType> d_batch_points(batch_product_count * NOBJS, 0);
         materialize_cutset_products_kernel<<<batch_node_count, kThreadsPerBlock>>>(
             thrust::raw_pointer_cast(d_td_points.data()),
             thrust::raw_pointer_cast(d_btd_off.data()),
@@ -357,122 +476,55 @@ ParetoFrontier* couple_mdd_cutsets(
             thrust::raw_pointer_cast(d_bbu_sz.data()),
             thrust::raw_pointer_cast(d_bprod_off.data()),
             batch_node_count,
-            thrust::raw_pointer_cast(d_bpts.data()));
+            thrust::raw_pointer_cast(d_batch_points.data()));
         if (!sync_kernel("cart_batch", reason)) return NULL;
-        time_cart += (double)(clock()-ca)/CLOCKS_PER_SEC;
 
-        // ---- B: Filter batch against frontier ----
-        clock_t fa = clock();
-        int batch_surv = batch_product_count;
-        thrust::device_vector<ObjType> d_surv;
+        int batch_frontier_size = batch_product_count;
+        if (frontier_size > 0) {
+            thrust::device_vector<int> alive_batch(batch_frontier_size, 0);
+            mark_dominated_or_equal_by_frontier_kernel<<<ceil_div(batch_frontier_size, kThreadsPerBlock), kThreadsPerBlock>>>(
+                thrust::raw_pointer_cast(d_batch_points.data()),
+                batch_frontier_size,
+                thrust::raw_pointer_cast(d_frontier_pts.data()),
+                frontier_size,
+                thrust::raw_pointer_cast(alive_batch.data()));
+            if (!sync_kernel("batch_filter_global", reason)) return NULL;
 
-        if (frontier_size > 0 && batch_product_count > 0) {
-            // Kill batch points dominated by any frontier point.
-            thrust::device_vector<int> d_alive_f(batch_product_count, 0);
-            mark_dominated_by_frontier_kernel<<<ceil_div(batch_product_count, kThreadsPerBlock), kThreadsPerBlock>>>(
-                thrust::raw_pointer_cast(d_bpts.data()), batch_product_count,
-                thrust::raw_pointer_cast(d_frontier_pts.data()), frontier_size,
-                thrust::raw_pointer_cast(d_alive_f.data()));
-            if (!sync_kernel("filt_frontier", reason)) return NULL;
-
-            thrust::device_vector<int> d_pfx_f(batch_product_count, 0);
-            thrust::exclusive_scan(d_alive_f.begin(), d_alive_f.end(), d_pfx_f.begin());
-            batch_surv = thrust::reduce(d_alive_f.begin(), d_alive_f.end(), 0);
-
-            if (batch_surv > 0) {
-                d_surv.resize(batch_surv * NOBJS);
-                compact_alive_points_kernel<<<ceil_div(batch_product_count, kThreadsPerBlock), kThreadsPerBlock>>>(
-                    thrust::raw_pointer_cast(d_alive_f.data()),
-                    thrust::raw_pointer_cast(d_pfx_f.data()),
-                    thrust::raw_pointer_cast(d_bpts.data()),
-                    thrust::raw_pointer_cast(d_surv.data()), batch_product_count);
-                if (!sync_kernel("scatter_filt", reason)) return NULL;
+            const int kept_batch = thrust::reduce(alive_batch.begin(), alive_batch.end(), 0);
+            if (!compact_points_by_alive(d_batch_points,
+                                         batch_frontier_size,
+                                         alive_batch,
+                                         kept_batch,
+                                         "batch_filter_global_compact",
+                                         reason)) {
+                return NULL;
             }
-        } else {
-            d_surv = d_bpts;
-            batch_surv = batch_product_count;
         }
-        time_filt += (double)(clock()-fa)/CLOCKS_PER_SEC;
 
-        // ---- C: Update frontier: remove dominated points, append survivors ----
-        clock_t ua = clock();
-        if (batch_surv > 0) {
-            // Remove frontier points dominated by any batch survivor
-            int kept_frontier = frontier_size;
-            if (frontier_size > 0) {
-                thrust::device_vector<int> d_alive_old(frontier_size, 0);
-                mark_frontier_dominated_by_batch_kernel<<<ceil_div(frontier_size, kThreadsPerBlock), kThreadsPerBlock>>>(
-                    thrust::raw_pointer_cast(d_frontier_pts.data()), frontier_size,
-                    thrust::raw_pointer_cast(d_surv.data()), batch_surv,
-                    thrust::raw_pointer_cast(d_alive_old.data()));
-                if (!sync_kernel("old_dom", reason)) return NULL;
-
-                kept_frontier = thrust::reduce(d_alive_old.begin(), d_alive_old.end(), 0);
-
-                if (kept_frontier < frontier_size) {
-                    thrust::device_vector<int> d_pfx_old(frontier_size, 0);
-                    thrust::exclusive_scan(d_alive_old.begin(), d_alive_old.end(), d_pfx_old.begin());
-                    thrust::device_vector<ObjType> d_kept(kept_frontier * NOBJS);
-                    compact_alive_points_kernel<<<ceil_div(frontier_size, kThreadsPerBlock), kThreadsPerBlock>>>(
-                        thrust::raw_pointer_cast(d_alive_old.data()),
-                        thrust::raw_pointer_cast(d_pfx_old.data()),
-                        thrust::raw_pointer_cast(d_frontier_pts.data()),
-                        thrust::raw_pointer_cast(d_kept.data()), frontier_size);
-                    if (!sync_kernel("scatter_kept", reason)) return NULL;
-                    d_frontier_pts.swap(d_kept);
-                }
-            }
-
-            // Append batch survivors to frontier
-            int new_total = kept_frontier + batch_surv;
-            d_frontier_pts.resize(new_total * NOBJS);
-            thrust::copy_n(d_surv.begin(), batch_surv * NOBJS,
-                           d_frontier_pts.begin() + kept_frontier * NOBJS);
-            frontier_size = new_total;
+        if (!self_prune_points(d_batch_points, batch_frontier_size, reason)) {
+            return NULL;
         }
-        time_update += (double)(clock()-ua)/CLOCKS_PER_SEC;
         if (stats != NULL) {
-            stats->work_frontier_survivors_total += batch_surv;
-            stats->work_frontier_peak_points = std::max(stats->work_frontier_peak_points, static_cast<long long>(frontier_size));
+            stats->work_frontier_survivors_total += batch_frontier_size;
+        }
+        if (!merge_clean_points_into_frontier(d_frontier_pts,
+                                              frontier_size,
+                                              d_batch_points,
+                                              batch_frontier_size,
+                                              reason)) {
+            return NULL;
+        }
+        if (stats != NULL) {
+            stats->work_frontier_peak_points = std::max(
+                stats->work_frontier_peak_points,
+                static_cast<long long>(frontier_size));
         }
 
-        ++num_batches;
         batch_begin = batch_end;
     }
     clock_t t1 = clock();
     if (stats != NULL) {
         stats->wall_join_s += (double)(t1-t0)/CLOCKS_PER_SEC;
-    }
-
-    // ---- Final global dominance pass on accumulated frontier ----
-    clock_t fg0 = clock();
-    if (frontier_size > 1) {
-        thrust::device_vector<int> d_alive_final(frontier_size, 0);
-        mark_globally_dominated_kernel<<<ceil_div(frontier_size, kThreadsPerBlock), kThreadsPerBlock>>>(
-            thrust::raw_pointer_cast(d_frontier_pts.data()), frontier_size,
-            thrust::raw_pointer_cast(d_alive_final.data()));
-        if (!sync_kernel("final_dom", reason)) return NULL;
-
-        thrust::device_vector<int> d_pfx_final(frontier_size, 0);
-        thrust::exclusive_scan(d_alive_final.begin(), d_alive_final.end(), d_pfx_final.begin());
-        int final_size = thrust::reduce(d_alive_final.begin(), d_alive_final.end(), 0);
-
-        if (final_size < frontier_size) {
-            thrust::device_vector<ObjType> d_final(final_size * NOBJS);
-            compact_alive_points_kernel<<<ceil_div(frontier_size, kThreadsPerBlock), kThreadsPerBlock>>>(
-                thrust::raw_pointer_cast(d_alive_final.data()),
-                thrust::raw_pointer_cast(d_pfx_final.data()),
-                thrust::raw_pointer_cast(d_frontier_pts.data()),
-                thrust::raw_pointer_cast(d_final.data()), frontier_size);
-            if (!sync_kernel("scatter_final", reason)) return NULL;
-            d_frontier_pts.swap(d_final);
-            frontier_size = final_size;
-        }
-    }
-    clock_t fg1 = clock();
-    if (stats != NULL) {
-        stats->wall_join_s += (double)(fg1-fg0)/CLOCKS_PER_SEC;
-        stats->work_frontier_peak_points = std::max(stats->work_frontier_peak_points, static_cast<long long>(frontier_size));
     }
 
     // Copy final frontier to host

@@ -327,7 +327,7 @@ bool expand_layer_frontiers(
         *std_candidates_out = population_std_from_device_counts(d_cc);
     }
 
-    const long long max_candidate_points_per_batch = 96000000LL;
+    const long long max_candidate_points_per_batch = 20000000LL;
     if (total_cand > max_candidate_points_per_batch) {
         thrust::host_vector<int> h_in_edge_offsets = in_edge_offsets;
         thrust::host_vector<int> h_eo = d_eo;

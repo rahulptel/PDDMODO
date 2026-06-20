@@ -788,7 +788,7 @@ ParetoFrontier* enumerate_bdd_topdown(BDD* bdd,
                 }
                 layer_candidates_std = population_std_from_device_counts(d_cand_counts);
 
-                const long long max_candidate_points_per_batch = 96000000LL;
+                const long long max_candidate_points_per_batch = 20000000LL;
                 if (total_candidates > max_candidate_points_per_batch) {
                     thrust::host_vector<int> h_in_edge_offsets = packed.in_edge_offsets;
                     thrust::host_vector<int> h_edge_offsets = d_edge_offsets;
