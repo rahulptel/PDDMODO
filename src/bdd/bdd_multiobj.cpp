@@ -30,6 +30,47 @@ inline void recycle_frontier(ParetoFrontierManager* mgmr, ParetoFrontier* fronti
     }
 }
 
+inline ParetoFrontier* parallel_reduce_partial_frontiers(vector<ParetoFrontier*>& partial,
+                                                         const bool parallel_mode,
+                                                         const int threads) {
+    size_t active_count = 0;
+    for (size_t i = 0; i < partial.size(); ++i) {
+        if (partial[i] != NULL) {
+            partial[active_count++] = partial[i];
+        }
+    }
+
+    if (active_count == 0) {
+        return new ParetoFrontier;
+    }
+
+    while (active_count > 1) {
+        const size_t pair_count = active_count / 2;
+        const long long pair_count_ll = static_cast<long long>(pair_count);
+        CUMODD_OMP_PARALLEL_FOR_DYNAMIC_IF(parallel_mode, threads)
+        for (long long p = 0; p < pair_count_ll; ++p) {
+            const size_t lhs_idx = static_cast<size_t>(p) * 2;
+            const size_t rhs_idx = lhs_idx + 1;
+            ParetoFrontier* lhs = partial[lhs_idx];
+            ParetoFrontier* rhs = partial[rhs_idx];
+            assert(lhs != NULL);
+            assert(rhs != NULL);
+            lhs->merge(*rhs);
+            delete rhs;
+            partial[static_cast<size_t>(p)] = lhs;
+        }
+
+        if ((active_count % 2) != 0) {
+            partial[pair_count] = partial[active_count - 1];
+            active_count = pair_count + 1;
+        } else {
+            active_count = pair_count;
+        }
+    }
+
+    return partial[0];
+}
+
 inline bool IntPairLargestToSmallestComp(intpair l, intpair r) {
     return l.second > r.second;     // from largest to smallest
 }
@@ -1534,8 +1575,7 @@ ParetoFrontier* BDDMultiObj::pareto_frontier_dynamic_layer_cutset(BDD* bdd, bool
     }
 	expected_size = 10000;
 
-	ParetoFrontier* paretoFrontier = new ParetoFrontier;
-	paretoFrontier->sols.reserve( expected_size * NOBJS );
+	ParetoFrontier* paretoFrontier = NULL;
 
     if (parallel_mode && cutset.size() > 1) {
         const WallClock::time_point join_begin = metrics_enabled ? WallClock::now() : WallClock::time_point();
@@ -1558,17 +1598,14 @@ ParetoFrontier* BDDMultiObj::pareto_frontier_dynamic_layer_cutset(BDD* bdd, bool
             stats->wall_cutset_convolution_s += wall_elapsed_s(convolution_begin);
         }
         const WallClock::time_point partial_merge_begin = metrics_enabled ? WallClock::now() : WallClock::time_point();
-        for (int t = 0; t < threads; ++t) {
-            if (partial[t] != NULL) {
-                paretoFrontier->merge(*partial[t]);
-                delete partial[t];
-            }
-        }
+        paretoFrontier = parallel_reduce_partial_frontiers(partial, parallel_mode, threads);
         if (metrics_enabled) {
             stats->wall_cutset_partial_merge_s += wall_elapsed_s(partial_merge_begin);
             stats->wall_join_s += wall_elapsed_s(join_begin);
         }
     } else {
+        paretoFrontier = new ParetoFrontier;
+        paretoFrontier->sols.reserve( expected_size * NOBJS );
         const WallClock::time_point join_begin = metrics_enabled ? WallClock::now() : WallClock::time_point();
         const WallClock::time_point convolution_begin = metrics_enabled ? WallClock::now() : WallClock::time_point();
         for (int i = 0; i < cutset.size(); ++i) {
@@ -2103,8 +2140,7 @@ ParetoFrontier* BDDMultiObj::pareto_frontier_dynamic_layer_cutset(MDD* mdd, Enum
     }
 	expected_size = 10000;
 
-	ParetoFrontier* paretoFrontier = new ParetoFrontier;
-	paretoFrontier->sols.reserve( expected_size * NOBJS );
+	ParetoFrontier* paretoFrontier = NULL;
 
     if (parallel_mode && cutset.size() > 1) {
         const WallClock::time_point join_begin = metrics_enabled ? WallClock::now() : WallClock::time_point();
@@ -2127,17 +2163,14 @@ ParetoFrontier* BDDMultiObj::pareto_frontier_dynamic_layer_cutset(MDD* mdd, Enum
             stats->wall_cutset_convolution_s += wall_elapsed_s(convolution_begin);
         }
         const WallClock::time_point partial_merge_begin = metrics_enabled ? WallClock::now() : WallClock::time_point();
-        for (int t = 0; t < threads; ++t) {
-            if (partial[t] != NULL) {
-                paretoFrontier->merge(*partial[t]);
-                delete partial[t];
-            }
-        }
+        paretoFrontier = parallel_reduce_partial_frontiers(partial, parallel_mode, threads);
         if (metrics_enabled) {
             stats->wall_cutset_partial_merge_s += wall_elapsed_s(partial_merge_begin);
             stats->wall_join_s += wall_elapsed_s(join_begin);
         }
     } else {
+        paretoFrontier = new ParetoFrontier;
+        paretoFrontier->sols.reserve( expected_size * NOBJS );
         const WallClock::time_point join_begin = metrics_enabled ? WallClock::now() : WallClock::time_point();
         const WallClock::time_point convolution_begin = metrics_enabled ? WallClock::now() : WallClock::time_point();
         for (int i = 0; i < cutset.size(); ++i) {
