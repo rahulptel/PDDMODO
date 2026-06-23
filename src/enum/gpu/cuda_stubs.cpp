@@ -4,7 +4,7 @@
 #include "../../bdd/pareto_frontier.hpp"
 #include "../../mdd/mdd.hpp"
 #include "../../bdd/bdd.hpp"
-#include "../../bdd/bdd_multiobj.hpp"
+#include "../multiobj_enum.hpp"
 
 ParetoFrontier* topdown_cuda_enumerate(BDD* bdd, bool maximization, const int problem_type, const int state_dominance, EnumerationStats* stats, std::string* reason) {
     (void)bdd;

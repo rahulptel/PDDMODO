@@ -2,7 +2,7 @@
 
 #include <string>
 
-#include "../../bdd/bdd_multiobj.hpp"
+#include "../multiobj_enum.hpp"
 #include "../../mdd/mdd.hpp"
 #include "../../bdd/bdd.hpp"
 #include "../../bdd/pareto_frontier.hpp"

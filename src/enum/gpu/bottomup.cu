@@ -13,7 +13,7 @@
 
 #include <cuda_runtime.h>
 
-#include "../../bdd/bdd_multiobj.hpp"
+#include "../multiobj_enum.hpp"
 #include "dominance_utils.cuh"
 #include "enum_types.cuh"
 

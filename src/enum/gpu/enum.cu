@@ -5,7 +5,7 @@
 #include "cuda_wrappers.hpp"
 #include "enum_types.cuh"
 #include "../../mdd/mdd.hpp"
-#include "../../bdd/bdd_multiobj.hpp"
+#include "../multiobj_enum.hpp"
 
 #include <chrono>
 #include <algorithm>

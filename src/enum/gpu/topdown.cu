@@ -13,7 +13,7 @@
 
 #include <cuda_runtime.h>
 
-#include "../../bdd/bdd_multiobj.hpp"
+#include "../multiobj_enum.hpp"
 #include "dominance_utils.cuh"
 
 #include <thrust/device_vector.h>
@@ -553,7 +553,7 @@ inline bool apply_knapsack_state_dominance(BDD* bdd,
 
 } // namespace
 
-void BDDMultiObj::filter_dominance_cuda(BDD* bdd,
+void MultiobjEnum::filter_dominance_cuda(BDD* bdd,
                                         const int layer,
                                         const int problem_type,
                                         const int state_dominance,
@@ -572,7 +572,7 @@ void BDDMultiObj::filter_dominance_cuda(BDD* bdd,
     }
 }
 
-void BDDMultiObj::filter_dominance_knapsack_cuda(BDD* bdd, const int layer, EnumerationStats* stats) {
+void MultiobjEnum::filter_dominance_knapsack_cuda(BDD* bdd, const int layer, EnumerationStats* stats) {
     LayerDominanceContext* ctx = g_layer_dom_ctx;
     if (ctx == NULL) {
         return;
@@ -1072,7 +1072,7 @@ ParetoFrontier* enumerate_bdd_topdown(BDD* bdd,
 
             g_layer_dom_ctx = &dom_ctx;
             clock_t init = clock();
-            BDDMultiObj::filter_dominance_cuda(bdd, l, problem_type, state_dominance, stats);
+            MultiobjEnum::filter_dominance_cuda(bdd, l, problem_type, state_dominance, stats);
             if (stats != NULL) {
                 stats->cpu_state_dominance_s += static_cast<double>(clock() - init) / CLOCKS_PER_SEC;
             }

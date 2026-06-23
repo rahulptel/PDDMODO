@@ -2,21 +2,21 @@
 // BDD Multiobjective Algorithms
 // ----------------------------------------------------------
 
-#ifndef BDD_MULTIOBJ_HPP_
-#define BDD_MULTIOBJ_HPP_
+#ifndef MULTIOBJ_ENUM_HPP_
+#define MULTIOBJ_ENUM_HPP_
 
 #include <string>
 
 #include "../mdd/mdd.hpp"
 #include "../util/util.hpp"
-#include "bdd.hpp"
-#include "pareto_frontier.hpp"
+#include "../bdd/bdd.hpp"
+#include "../bdd/pareto_frontier.hpp"
 #include "../util/stats.hpp"
 
 //
-// BDD Multiobjective Algorithms
+// Multiobjective Enumeration Dispatch Hub
 //
-struct BDDMultiObj {
+struct MultiobjEnum {
     // Find pareto frontier from top-down approach
 	static ParetoFrontier* pareto_frontier_topdown(BDD* bdd, bool maximization=true, const int problem_type=-1, const int state_dominance=0, EnumerationStats* stats = NULL, int cpu_threads = 1, int cpu_topdown_kernel = 1);
 
