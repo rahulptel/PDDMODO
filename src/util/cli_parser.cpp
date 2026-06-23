@@ -6,6 +6,7 @@
 #include "omp_compat.hpp"
 
 #include <cerrno>
+#include <cctype>
 #include <climits>
 #include <cstdlib>
 #include <iostream>
@@ -18,6 +19,7 @@ CliOptions::CliOptions()
       state_dominance(0),
       backend(BACKEND_CPU),
       cpu_threads(1),
+      gpu_batch_size(DEFAULT_GPU_BATCH_SIZE),
       save_frontier(false),
       save_stats(false)
 {
@@ -95,6 +97,69 @@ static bool parse_positive_int(const string &value, int *out_value)
     return true;
 }
 
+static bool parse_gpu_batch_size(const string &value, long long *out_value)
+{
+    if (value.empty())
+    {
+        return false;
+    }
+
+    long long multiplier = 1;
+    string digits = value;
+    const char last = value[value.size() - 1];
+    if (isalpha(static_cast<unsigned char>(last)))
+    {
+        digits = value.substr(0, value.size() - 1);
+        const char suffix = static_cast<char>(toupper(static_cast<unsigned char>(last)));
+        if (suffix == 'K')
+        {
+            multiplier = 1000LL;
+        }
+        else if (suffix == 'M')
+        {
+            multiplier = 1000000LL;
+        }
+        else if (suffix == 'B')
+        {
+            multiplier = 1000000000LL;
+        }
+        else
+        {
+            return false;
+        }
+    }
+
+    if (digits.empty())
+    {
+        return false;
+    }
+    for (size_t i = 0; i < digits.size(); ++i)
+    {
+        if (!isdigit(static_cast<unsigned char>(digits[i])))
+        {
+            return false;
+        }
+    }
+
+    errno = 0;
+    char *end_ptr = NULL;
+    long long parsed = strtoll(digits.c_str(), &end_ptr, 10);
+    if (errno != 0 || end_ptr == digits.c_str() || *end_ptr != '\0')
+    {
+        return false;
+    }
+    if (parsed <= 0 || parsed > LLONG_MAX / multiplier)
+    {
+        return false;
+    }
+
+    if (out_value != NULL)
+    {
+        *out_value = parsed * multiplier;
+    }
+    return true;
+}
+
 const char *backend_to_string(const Backend backend)
 {
     return backend == BACKEND_GPU ? "gpu" : "cpu";
@@ -141,6 +206,7 @@ void print_usage()
     cout << "\t\t--frontier-out <path>: save Pareto frontier to explicit gzip CSV path\n";
     cout << "\t\t--save-stats: save one JSONL record with run statistics\n";
     cout << "\t\t--stats-out <path>: save JSONL statistics to explicit path\n";
+    cout << "\t\t--gpu-batch <N>: GPU candidate batch cap; supports K, M, B suffixes (default 20M)\n";
     cout << "\t\toptional arguments can be provided in any order\n";
 
     cout << endl;
@@ -185,6 +251,7 @@ bool parse_cli_args(int argc, char *argv[], CliOptions *out, string *error)
     bool backend_from_named = false;
     bool backend_from_shorthand = false;
     bool cpu_threads_set = false;
+    bool gpu_batch_set = false;
 
     for (int i = 5; i < argc; ++i)
     {
@@ -271,6 +338,35 @@ bool parse_cli_args(int argc, char *argv[], CliOptions *out, string *error)
                 return false;
             }
             cpu_threads_set = true;
+        }
+        else if (token == "--gpu-batch")
+        {
+            if (gpu_batch_set)
+            {
+                if (error != NULL)
+                {
+                    *error = "Error - GPU batch size provided multiple times.";
+                }
+                return false;
+            }
+            if (i + 1 >= argc)
+            {
+                if (error != NULL)
+                {
+                    *error = "Error - --gpu-batch requires a positive integer, optionally using K, M, or B suffix.";
+                }
+                return false;
+            }
+            string value(argv[++i]);
+            if (!parse_gpu_batch_size(value, &opts.gpu_batch_size))
+            {
+                if (error != NULL)
+                {
+                    *error = "Error - invalid --gpu-batch value '" + value + "' (expected positive integer with optional K, M, or B suffix).";
+                }
+                return false;
+            }
+            gpu_batch_set = true;
         }
         else if (token == "cpu" || token == "gpu")
         {
@@ -427,6 +523,14 @@ bool parse_cli_args(int argc, char *argv[], CliOptions *out, string *error)
         if (error != NULL)
         {
             *error = "Error - cpu thread options are not valid with backend=gpu.";
+        }
+        return false;
+    }
+    if (opts.backend == BACKEND_CPU && gpu_batch_set)
+    {
+        if (error != NULL)
+        {
+            *error = "Error - --gpu-batch is only valid with backend=gpu.";
         }
         return false;
     }

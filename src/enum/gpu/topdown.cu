@@ -579,7 +579,8 @@ ParetoFrontier* enumerate_bdd_topdown(BDD* bdd,
                                        const int problem_type,
                                        const int state_dominance,
                                        EnumerationStats* stats,
-                                       std::string* reason) {
+                                       std::string* reason,
+                                       long long max_candidate_points_per_batch) {
     if (bdd == NULL) {
         set_reason(reason, "BDD pointer is NULL");
         return NULL;
@@ -689,7 +690,6 @@ ParetoFrontier* enumerate_bdd_topdown(BDD* bdd,
                 }
                 layer_candidates_std = population_std_from_device_counts(d_cand_counts);
 
-                const long long max_candidate_points_per_batch = 20000000LL;
                 if (total_candidates > max_candidate_points_per_batch) {
                     thrust::host_vector<int> h_in_edge_offsets = packed.td_in_edge_offsets;
                     thrust::host_vector<int> h_edge_offsets = d_edge_offsets;
@@ -1047,6 +1047,7 @@ bool topdown_expand_mdd_layer(
     thrust::device_vector<int>& d_next_offsets,
     thrust::device_vector<ObjType>& d_next_points,
     std::string* reason,
+    long long max_candidate_points_per_batch,
     long long* total_candidates_out,
     long long* total_next_out,
     double* std_candidates_out,
@@ -1067,6 +1068,7 @@ bool topdown_expand_mdd_layer(
         d_next_offsets,
         d_next_points,
         reason,
+        max_candidate_points_per_batch,
         total_candidates_out,
         total_next_out,
         std_candidates_out,
@@ -1088,6 +1090,7 @@ bool topdown_expand_bdd_layer(
     thrust::device_vector<int>& d_next_offsets,
     thrust::device_vector<ObjType>& d_next_points,
     std::string* reason,
+    long long max_candidate_points_per_batch,
     long long* total_candidates_out,
     long long* total_next_out,
     double* std_candidates_out,
@@ -1108,6 +1111,7 @@ bool topdown_expand_bdd_layer(
         d_next_offsets,
         d_next_points,
         reason,
+        max_candidate_points_per_batch,
         total_candidates_out,
         total_next_out,
         std_candidates_out,

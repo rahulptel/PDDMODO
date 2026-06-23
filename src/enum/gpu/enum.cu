@@ -19,15 +19,18 @@ ParetoFrontier* enumerate_bdd_topdown(BDD* bdd,
                                       const int problem_type,
                                       const int state_dominance,
                                       EnumerationStats* stats,
-                                      std::string* reason);
+                                      std::string* reason,
+                                      long long gpu_batch_size);
 
 ParetoFrontier* enumerate_mdd_topdown(MDD* mdd,
                                       EnumerationStats* stats,
-                                      std::string* reason);
+                                      std::string* reason,
+                                      long long gpu_batch_size);
 
 ParetoFrontier* enumerate_mdd_coupled(MDD* mdd,
                                       EnumerationStats* stats,
-                                      std::string* reason);
+                                      std::string* reason,
+                                      long long gpu_batch_size);
 
 namespace {
 
@@ -65,29 +68,32 @@ ParetoFrontier* topdown_cuda_enumerate(BDD* bdd,
                                        const int problem_type,
                                        const int state_dominance,
                                        EnumerationStats* stats,
-                                       std::string* reason) {
+                                       std::string* reason,
+                                       long long gpu_batch_size) {
     if (!prepare_cuda_device(reason)) {
         return NULL;
     }
-    return enumerate_bdd_topdown(bdd, maximization, problem_type, state_dominance, stats, reason);
+    return enumerate_bdd_topdown(bdd, maximization, problem_type, state_dominance, stats, reason, gpu_batch_size);
 }
 
 ParetoFrontier* topdown_mdd_cuda_enumerate(MDD* mdd,
                                            EnumerationStats* stats,
-                                           std::string* reason) {
+                                           std::string* reason,
+                                           long long gpu_batch_size) {
     if (!prepare_cuda_device(reason)) {
         return NULL;
     }
-    return enumerate_mdd_topdown(mdd, stats, reason);
+    return enumerate_mdd_topdown(mdd, stats, reason, gpu_batch_size);
 }
 
 ParetoFrontier* coupled_cuda_enumerate(MDD* mdd,
                                        EnumerationStats* stats,
-                                       std::string* reason) {
+                                       std::string* reason,
+                                       long long gpu_batch_size) {
     if (!prepare_cuda_device(reason)) {
         return NULL;
     }
-    return enumerate_mdd_coupled(mdd, stats, reason);
+    return enumerate_mdd_coupled(mdd, stats, reason, gpu_batch_size);
 }
 
 // ----------------------------------------------------------
@@ -174,7 +180,8 @@ void pack_mdd_layers(MDD* mdd, std::vector<PackedMDDLayer>& packed, bool pack_bo
 
 ParetoFrontier* enumerate_mdd_topdown(MDD* mdd,
                                       EnumerationStats* stats,
-                                      std::string* reason) {
+                                      std::string* reason,
+                                      long long gpu_batch_size) {
     if (mdd == NULL) { set_reason(reason, "MDD is NULL"); return NULL; }
     if (mdd->num_layers <= 0) { set_reason(reason, "MDD has zero layers"); return NULL; }
     long long gpu_mem_baseline_used_bytes = 0;
@@ -227,6 +234,7 @@ ParetoFrontier* enumerate_mdd_topdown(MDD* mdd,
                     packed[l],
                     d_td_offsets, d_td_points,
                     next_sizes, next_offsets, next_points, reason,
+                    gpu_batch_size,
                     &layer_candidates, &layer_survivors,
                     &layer_candidates_std, &layer_survivors_std,
                     stats != NULL ? &gpu_mem_baseline_used_bytes : NULL,
@@ -294,7 +302,8 @@ ParetoFrontier* enumerate_mdd_topdown(MDD* mdd,
 
 ParetoFrontier* enumerate_mdd_coupled(MDD* mdd,
                                       EnumerationStats* stats,
-                                      std::string* reason) {
+                                      std::string* reason,
+                                      long long gpu_batch_size) {
     if (mdd == NULL) { set_reason(reason, "MDD is NULL"); return NULL; }
     if (mdd->num_layers <= 0) { set_reason(reason, "MDD has zero layers"); return NULL; }
     if (stats != NULL) {
@@ -360,6 +369,7 @@ ParetoFrontier* enumerate_mdd_coupled(MDD* mdd,
                         packed[layer_td],
                         d_td_offsets, d_td_points,
                         next_sizes, next_offsets, next_points, reason,
+                        gpu_batch_size,
                         &layer_candidates, &layer_survivors,
                         NULL, NULL,
                         NULL, NULL, NULL)) {
@@ -395,6 +405,7 @@ ParetoFrontier* enumerate_mdd_coupled(MDD* mdd,
                         packed[layer_bu],
                         d_bu_offsets, d_bu_points,
                         next_sizes, next_offsets, next_points, reason,
+                        gpu_batch_size,
                         &layer_candidates, &layer_survivors,
                         NULL, NULL,
                         NULL, NULL, NULL)) {
@@ -579,7 +590,7 @@ void pack_bdd_layers(BDD* bdd, std::vector<PackedBDDLayer>& packed, bool pack_bo
     }
 }
 
-ParetoFrontier* coupled_bdd_cuda_enumerate(BDD* bdd, bool maximization, const int problem_type, const int state_dominance, EnumerationStats* stats, std::string* reason) {
+ParetoFrontier* coupled_bdd_cuda_enumerate(BDD* bdd, bool maximization, const int problem_type, const int state_dominance, EnumerationStats* stats, std::string* reason, long long gpu_batch_size) {
     if (!prepare_cuda_device(reason)) {
         return NULL;
     }
@@ -651,6 +662,7 @@ ParetoFrontier* coupled_bdd_cuda_enumerate(BDD* bdd, bool maximization, const in
                         packed[layer_td],
                         d_td_offsets, d_td_points,
                         next_sizes, next_offsets, next_points, reason,
+                        gpu_batch_size,
                         &layer_candidates, &layer_survivors,
                         NULL, NULL,
                         stats != NULL ? &gpu_mem_baseline_used_bytes : NULL,
@@ -688,6 +700,7 @@ ParetoFrontier* coupled_bdd_cuda_enumerate(BDD* bdd, bool maximization, const in
                         packed[layer_bu],
                         d_bu_offsets, d_bu_points,
                         next_sizes, next_offsets, next_points, reason,
+                        gpu_batch_size,
                         &layer_candidates, &layer_survivors,
                         NULL, NULL,
                         stats != NULL ? &gpu_mem_baseline_used_bytes : NULL,
@@ -732,4 +745,3 @@ ParetoFrontier* coupled_bdd_cuda_enumerate(BDD* bdd, bool maximization, const in
     }
     return res;
 }
-

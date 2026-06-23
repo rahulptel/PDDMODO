@@ -67,42 +67,42 @@ ParetoFrontier* MultiobjEnum::pareto_frontier_dynamic_layer_cutset(MDD* mdd, Enu
 
 // GPU / CUDA Drivers & Wrappers
 
-ParetoFrontier* MultiobjEnum::pareto_frontier_topdown_cuda(BDD* bdd, bool maximization, const int problem_type, const int state_dominance, EnumerationStats* stats, std::string* reason) {
+ParetoFrontier* MultiobjEnum::pareto_frontier_topdown_cuda(BDD* bdd, bool maximization, const int problem_type, const int state_dominance, EnumerationStats* stats, std::string* reason, long long gpu_batch_size) {
     if (stats != NULL) {
         stats->cpu_state_dominance_s = 0.0;
         stats->dominance_filtered_total = 0;
         stats->layer_coupling = 0;
         reset_cpu_metrics_stats(stats);
     }
-    return ::topdown_cuda_enumerate(bdd, maximization, problem_type, state_dominance, stats, reason);
+    return ::topdown_cuda_enumerate(bdd, maximization, problem_type, state_dominance, stats, reason, gpu_batch_size);
 }
 
-ParetoFrontier* MultiobjEnum::pareto_frontier_dynamic_layer_cutset_cuda(BDD* bdd, bool maximization, const int problem_type, const int state_dominance, EnumerationStats* stats, std::string* reason) {
+ParetoFrontier* MultiobjEnum::pareto_frontier_dynamic_layer_cutset_cuda(BDD* bdd, bool maximization, const int problem_type, const int state_dominance, EnumerationStats* stats, std::string* reason, long long gpu_batch_size) {
     if (stats != NULL) {
         stats->cpu_state_dominance_s = 0.0;
         stats->dominance_filtered_total = 0;
         stats->layer_coupling = 0;
         reset_cpu_metrics_stats(stats);
     }
-    return ::coupled_bdd_cuda_enumerate(bdd, maximization, problem_type, state_dominance, stats, reason);
+    return ::coupled_bdd_cuda_enumerate(bdd, maximization, problem_type, state_dominance, stats, reason, gpu_batch_size);
 }
 
-ParetoFrontier* MultiobjEnum::pareto_frontier_topdown_cuda(MDD* mdd, EnumerationStats* stats, std::string* reason) {
+ParetoFrontier* MultiobjEnum::pareto_frontier_topdown_cuda(MDD* mdd, EnumerationStats* stats, std::string* reason, long long gpu_batch_size) {
     if (stats != NULL) {
         stats->cpu_state_dominance_s = 0.0;
         stats->dominance_filtered_total = 0;
         stats->layer_coupling = 0;
         reset_cpu_metrics_stats(stats);
     }
-    return ::topdown_mdd_cuda_enumerate(mdd, stats, reason);
+    return ::topdown_mdd_cuda_enumerate(mdd, stats, reason, gpu_batch_size);
 }
 
-ParetoFrontier* MultiobjEnum::pareto_frontier_dynamic_layer_cutset_cuda(MDD* mdd, EnumerationStats* stats, std::string* reason) {
+ParetoFrontier* MultiobjEnum::pareto_frontier_dynamic_layer_cutset_cuda(MDD* mdd, EnumerationStats* stats, std::string* reason, long long gpu_batch_size) {
     if (stats != NULL) {
         stats->cpu_state_dominance_s = 0.0;
         stats->dominance_filtered_total = 0;
         stats->layer_coupling = 0;
         reset_cpu_metrics_stats(stats);
     }
-    return ::coupled_cuda_enumerate(mdd, stats, reason);
+    return ::coupled_cuda_enumerate(mdd, stats, reason, gpu_batch_size);
 }

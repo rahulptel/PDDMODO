@@ -7,6 +7,8 @@
 
 #include <string>
 
+const long long DEFAULT_GPU_BATCH_SIZE = 20000000LL;
+
 enum Backend
 {
     BACKEND_CPU = 0,
@@ -21,6 +23,7 @@ struct CliOptions
     int state_dominance;
     Backend backend;
     int cpu_threads;
+    long long gpu_batch_size;
     bool save_frontier;
     std::string frontier_out_path;
     bool save_stats;
