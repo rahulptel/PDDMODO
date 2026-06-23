@@ -10,7 +10,7 @@
 #include "../mdd/mdd.hpp"
 #include "../util/util.hpp"
 #include "../bdd/bdd.hpp"
-#include "../bdd/pareto_frontier.hpp"
+#include "pareto_frontier.hpp"
 #include "../util/stats.hpp"
 
 //

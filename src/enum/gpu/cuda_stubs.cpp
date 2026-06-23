@@ -1,7 +1,7 @@
 // Stub implementations of CUDA wrappers used when compiling without USE_CUDA
 
 #include "cuda_wrappers.hpp"
-#include "../../bdd/pareto_frontier.hpp"
+#include "../pareto_frontier.hpp"
 #include "../../mdd/mdd.hpp"
 #include "../../bdd/bdd.hpp"
 #include "../multiobj_enum.hpp"

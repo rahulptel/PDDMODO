@@ -20,7 +20,7 @@
 #include "util/stats.hpp"
 #include "util/util.hpp"
 #include "util/output_utils.hpp"
-#include "bdd/pareto_frontier.hpp"
+#include "enum/pareto_frontier.hpp"
 
 // Knapsack includes
 #include "instances/knapsack_instance.hpp"

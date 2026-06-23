@@ -15,7 +15,7 @@
 #include <algorithm>
 #include <utility>
 
-#include "../../bdd/pareto_frontier.hpp"
+#include "../pareto_frontier.hpp"
 #include "../../bdd/bdd.hpp"
 #include "../../mdd/mdd.hpp"
 #include "../../util/stats.hpp"
