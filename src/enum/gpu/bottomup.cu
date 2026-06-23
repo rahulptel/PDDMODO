@@ -619,3 +619,40 @@ bool bottomup_expand_mdd_layer(
         gpu_mem_peak_used_bytes,
         gpu_mem_peak_reserved_bytes);
 }
+
+bool bottomup_expand_bdd_layer(
+    const PackedBDDLayer& packed_layer,
+    const thrust::device_vector<int>& d_prev_offsets,
+    const thrust::device_vector<ObjType>& d_prev_points,
+    thrust::device_vector<int>& d_next_sizes,
+    thrust::device_vector<int>& d_next_offsets,
+    thrust::device_vector<ObjType>& d_next_points,
+    std::string* reason,
+    long long* total_candidates_out,
+    long long* total_next_out,
+    double* std_candidates_out,
+    double* std_survivors_out,
+    long long* gpu_mem_baseline_used_bytes,
+    long long* gpu_mem_peak_used_bytes,
+    long long* gpu_mem_peak_reserved_bytes) {
+
+    return expand_layer_frontiers(
+        packed_layer.bu_in_edge_offsets,
+        packed_layer.bu_edge_src,
+        packed_layer.bu_edge_weights,
+        packed_layer.bu_num_edges,
+        packed_layer.num_nodes,
+        d_prev_offsets,
+        d_prev_points,
+        d_next_sizes,
+        d_next_offsets,
+        d_next_points,
+        reason,
+        total_candidates_out,
+        total_next_out,
+        std_candidates_out,
+        std_survivors_out,
+        gpu_mem_baseline_used_bytes,
+        gpu_mem_peak_used_bytes,
+        gpu_mem_peak_reserved_bytes);
+}

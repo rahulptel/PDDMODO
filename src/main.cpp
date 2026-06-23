@@ -374,17 +374,27 @@ int main(int argc, char *argv[])
         // -- Dynamic layer cutset --
         if (backend == BACKEND_GPU)
         {
-            cout << "Error - GPU backend is unsupported for method 3." << endl;
-            exit(1);
+            string cuda_reason;
+            pareto_frontier = MultiobjEnum::pareto_frontier_dynamic_layer_cutset_cuda(bdd, maximization, problem_type, state_dominance, enumeration_stats, &cuda_reason);
+            if (pareto_frontier == NULL)
+            {
+                cout << "Error - GPU backend requested but coupled enumeration failed";
+                if (!cuda_reason.empty()) cout << ": " << cuda_reason;
+                cout << endl;
+                exit(1);
+            }
         }
-        try
+        else
         {
-            pareto_frontier = MultiobjEnum::pareto_frontier_dynamic_layer_cutset(bdd, maximization, problem_type, state_dominance, enumeration_stats, cpu_threads, cpu_kernel);
-        }
-        catch (const std::exception &e)
-        {
-            cout << "Error - CPU backend enumeration failed: " << e.what() << endl;
-            exit(1);
+            try
+            {
+                pareto_frontier = MultiobjEnum::pareto_frontier_dynamic_layer_cutset(bdd, maximization, problem_type, state_dominance, enumeration_stats, cpu_threads, cpu_kernel);
+            }
+            catch (const std::exception &e)
+            {
+                cout << "Error - CPU backend enumeration failed: " << e.what() << endl;
+                exit(1);
+            }
         }
     }
     else
