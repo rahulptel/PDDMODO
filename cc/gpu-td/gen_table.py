@@ -75,7 +75,7 @@ def main():
     else:
         source_data_base = (project_root / "data").resolve()
 
-    binary_base = project_root / "resources" / "bin" / farm_name
+    binary_base = project_root / "resources" / "bin"
     target_data_base = project_root / "data"
 
     lines = []

@@ -2,14 +2,9 @@
 
 set -euo pipefail
 
-SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(CDPATH= cd -- "$SCRIPT_DIR/../.." && pwd)"
-FARM_NAME="$(basename "$SCRIPT_DIR")"
-BIN_DIR="$PROJECT_ROOT/resources/bin/$FARM_NAME"
-
 CLEAN_FIRST="${CLEAN_FIRST:-1}"
 MACHINE="${machine:-${MACHINE:-}}"
-ENABLE_CUDA="${ENABLE_CUDA:-0}"
+ENABLE_CUDA="${ENABLE_CUDA:-1}"
 ENABLE_OPENMP="${ENABLE_OPENMP:-1}"
 NUM_OBJS_MIN="${NUM_OBJS_MIN:-3}"
 NUM_OBJS_MAX="${NUM_OBJS_MAX:-7}"
@@ -42,6 +37,7 @@ BUILD_ARGS=(
 
 NVCC_ARGS=()
 if [ -n "${NVCC:-}" ]; then
+    # Only override Makefile's auto-detection if user explicitly sets NVCC.
     NVCC_ARGS=("NVCC=$NVCC")
 fi
 
@@ -49,6 +45,9 @@ if [ "$MACHINE" = "cc" ] && [ -z "${BOOST_ROOT:-}" ]; then
     echo "Error: BOOST_ROOT must be set for machine 'cc'"
     exit 1
 fi
+
+PROJECT_ROOT="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+BIN_DIR="$PROJECT_ROOT/resources/bin"
 
 cd "$PROJECT_ROOT"
 mkdir -p "$BIN_DIR"
@@ -67,3 +66,5 @@ for i in $(seq "$NUM_OBJS_MIN" "$NUM_OBJS_MAX"); do
     fi
     mv -f "$BUILT_BIN" "$BIN_DIR/"
 done
+
+echo "Successfully built multiobj binaries and stored in $BIN_DIR"
