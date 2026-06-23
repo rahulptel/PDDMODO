@@ -10,7 +10,7 @@
 #include <new>
 #include <stdexcept>
 
-#include "../cuda/cuda_wrappers.hpp"
+#include "../enum/gpu/cuda_wrappers.hpp"
 #include "../util/omp_compat.hpp"
 
 typedef std::pair<int,int> intpair;

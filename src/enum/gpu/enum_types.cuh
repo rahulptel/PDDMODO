@@ -11,7 +11,7 @@
 #include <cuda_runtime.h>
 #include <thrust/device_vector.h>
 
-#include "../util/util.hpp"
+#include "../../util/util.hpp"
 
 struct EnumerationStats;
 struct MDD;
