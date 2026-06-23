@@ -670,7 +670,7 @@ ParetoFrontier* enumerate_bdd_topdown(BDD* bdd,
 
             if (total_candidates > 0) {
                 thrust::device_vector<int> d_dst_blocks(next_nodes, 0);
-                ScopedCudaEventTimer dst_counts_timer("cudaEventCreate/count_destination_candidates_kernel_v3", reason);
+                ScopedCudaEventTimer dst_counts_timer("cudaEventCreate/count_destination_candidates_kernel", reason);
                 if (!dst_counts_timer.ok()) {
                     return NULL;
                 }
@@ -680,11 +680,11 @@ ParetoFrontier* enumerate_bdd_topdown(BDD* bdd,
                     next_nodes,
                     thrust::raw_pointer_cast(d_cand_counts.data()),
                     thrust::raw_pointer_cast(d_dst_blocks.data()));
-                if (!sync_kernel("count_destination_candidates_kernel_v3", reason)) {
+                if (!sync_kernel("count_destination_candidates_kernel", reason)) {
                     return NULL;
                 }
                 if (!dst_counts_timer.finish_and_add(stats != NULL ? &stats->kernel_expand_td_s : NULL,
-                                                     "cudaEventElapsedTime/count_destination_candidates_kernel_v3")) {
+                                                     "cudaEventElapsedTime/count_destination_candidates_kernel")) {
                     return NULL;
                 }
                 layer_candidates_std = population_std_from_device_counts(d_cand_counts);

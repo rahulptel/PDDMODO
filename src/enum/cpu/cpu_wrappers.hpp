@@ -13,15 +13,15 @@
 
 // CPU wrapper functions that implement the enumeration methods
 
-ParetoFrontier* topdown_cpu_enumerate(BDD* bdd, bool maximization, const int problem_type, const int state_dominance, EnumerationStats* stats, int cpu_threads, int cpu_topdown_kernel);
+ParetoFrontier* topdown_cpu_enumerate(BDD* bdd, bool maximization, const int problem_type, const int state_dominance, EnumerationStats* stats, int cpu_threads);
 
-ParetoFrontier* topdown_mdd_cpu_enumerate(MDD* mdd, EnumerationStats* stats, int cpu_threads, int cpu_topdown_kernel);
+ParetoFrontier* topdown_mdd_cpu_enumerate(MDD* mdd, EnumerationStats* stats, int cpu_threads);
 
 ParetoFrontier* bottomup_cpu_enumerate(BDD* bdd, bool maximization, const int problem_type, const int state_dominance, EnumerationStats* stats, int cpu_threads);
 
-ParetoFrontier* coupled_cpu_enumerate(BDD* bdd, bool maximization, const int problem_type, const int state_dominance, EnumerationStats* stats, int cpu_threads, int cpu_coupled_kernel);
+ParetoFrontier* coupled_cpu_enumerate(BDD* bdd, bool maximization, const int problem_type, const int state_dominance, EnumerationStats* stats, int cpu_threads);
 
-ParetoFrontier* coupled_mdd_cpu_enumerate(MDD* mdd, EnumerationStats* stats, int cpu_threads, int cpu_coupled_kernel);
+ParetoFrontier* coupled_mdd_cpu_enumerate(MDD* mdd, EnumerationStats* stats, int cpu_threads);
 
 // CPU state dominance filtering functions
 

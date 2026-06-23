@@ -15,9 +15,8 @@ ParetoFrontier* MultiobjEnum::pareto_frontier_topdown(BDD* bdd,
                                                      const int problem_type,
                                                      const int state_dominance,
                                                      EnumerationStats* stats,
-                                                     int cpu_threads,
-                                                     int cpu_topdown_kernel) {
-    return ::topdown_cpu_enumerate(bdd, maximization, problem_type, state_dominance, stats, cpu_threads, cpu_topdown_kernel);
+                                                     int cpu_threads) {
+    return ::topdown_cpu_enumerate(bdd, maximization, problem_type, state_dominance, stats, cpu_threads);
 }
 
 ParetoFrontier* MultiobjEnum::pareto_frontier_bottomup(BDD* bdd,
@@ -34,9 +33,8 @@ ParetoFrontier* MultiobjEnum::pareto_frontier_dynamic_layer_cutset(BDD* bdd,
                                                                   const int problem_type,
                                                                   const int state_dominance,
                                                                   EnumerationStats* stats,
-                                                                  int cpu_threads,
-                                                                  int cpu_coupled_kernel) {
-    return ::coupled_cpu_enumerate(bdd, maximization, problem_type, state_dominance, stats, cpu_threads, cpu_coupled_kernel);
+                                                                  int cpu_threads) {
+    return ::coupled_cpu_enumerate(bdd, maximization, problem_type, state_dominance, stats, cpu_threads);
 }
 
 // BDD CPU State Dominance & Completion
@@ -59,12 +57,12 @@ void MultiobjEnum::filter_completion(BDD* bdd, const int layer) {
 
 // MDD CPU Drivers
 
-ParetoFrontier* MultiobjEnum::pareto_frontier_topdown(MDD* mdd, EnumerationStats* stats, int cpu_threads, int cpu_topdown_kernel) {
-    return ::topdown_mdd_cpu_enumerate(mdd, stats, cpu_threads, cpu_topdown_kernel);
+ParetoFrontier* MultiobjEnum::pareto_frontier_topdown(MDD* mdd, EnumerationStats* stats, int cpu_threads) {
+    return ::topdown_mdd_cpu_enumerate(mdd, stats, cpu_threads);
 }
 
-ParetoFrontier* MultiobjEnum::pareto_frontier_dynamic_layer_cutset(MDD* mdd, EnumerationStats* stats, int cpu_threads, int cpu_coupled_kernel) {
-    return ::coupled_mdd_cpu_enumerate(mdd, stats, cpu_threads, cpu_coupled_kernel);
+ParetoFrontier* MultiobjEnum::pareto_frontier_dynamic_layer_cutset(MDD* mdd, EnumerationStats* stats, int cpu_threads) {
+    return ::coupled_mdd_cpu_enumerate(mdd, stats, cpu_threads);
 }
 
 // GPU / CUDA Drivers & Wrappers

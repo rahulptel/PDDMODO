@@ -16,8 +16,7 @@ ParetoFrontier* topdown_cpu_enumerate(BDD* bdd,
                                      const int problem_type,
                                      const int state_dominance,
                                      EnumerationStats* stats,
-                                     int cpu_threads,
-                                     int cpu_topdown_kernel) {
+                                     int cpu_threads) {
     stats->cpu_state_dominance_s = 0.0;
     stats->dominance_filtered_total = 0;
     reset_cpu_metrics_stats(stats);
@@ -37,25 +36,12 @@ ParetoFrontier* topdown_cpu_enumerate(BDD* bdd,
     bdd->get_root()->pareto_frontier = request_frontier(mgmr, parallel_mode);
     bdd->get_root()->pareto_frontier->add(zero_array);
 
-    const bool use_kernel3 = (cpu_topdown_kernel == 3);
     for (int l = 1; l < bdd->num_layers; ++l) {
         const long long layer_candidates = count_bdd_candidates_topdown_layer(bdd, l, maximization);
         const double layer_candidates_std = std_bdd_candidates_topdown_layer(bdd, l, maximization);
         const int layer_size = bdd->layers[l].size();
 
-        bool expanded = true;
-        if (use_kernel3) {
-            try {
-                expanded = expand_layer_topdown_cpu_kernel3(bdd, l, maximization, mgmr, parallel_mode, threads);
-            } catch (const std::bad_alloc&) {
-                throw_cpu_kernel3_allocation_failure("top-down BDD");
-            }
-            if (!expanded) {
-                throw_cpu_kernel3_allocation_failure("top-down BDD");
-            }
-        } else {
-            expand_layer_topdown_cpu_kernel1(bdd, l, maximization, mgmr, parallel_mode, threads);
-        }
+        expand_layer_topdown_cpu(bdd, l, maximization, mgmr, parallel_mode, threads);
 
         if (state_dominance > 0) {
             const WallClock::time_point dominance_begin = metrics_enabled ? WallClock::now() : WallClock::time_point();
@@ -91,7 +77,7 @@ ParetoFrontier* topdown_cpu_enumerate(BDD* bdd,
     return frontier;
 }
 
-ParetoFrontier* topdown_mdd_cpu_enumerate(MDD* mdd, EnumerationStats* stats, int cpu_threads, int cpu_topdown_kernel) {
+ParetoFrontier* topdown_mdd_cpu_enumerate(MDD* mdd, EnumerationStats* stats, int cpu_threads) {
     stats->cpu_state_dominance_s = 0.0;
     stats->dominance_filtered_total = 0;
     reset_cpu_metrics_stats(stats);
@@ -110,26 +96,12 @@ ParetoFrontier* topdown_mdd_cpu_enumerate(MDD* mdd, EnumerationStats* stats, int
     mdd->get_root()->pareto_frontier = request_frontier(mgmr, parallel_mode);
     mdd->get_root()->pareto_frontier->add(zero_array);
 
-    const bool use_topdown_kernel3 = (cpu_topdown_kernel == 3);
-    
     for (int l = 1; l < mdd->num_layers; ++l) {    
         const long long layer_candidates = count_mdd_candidates_topdown_layer(mdd, l);
         const double layer_candidates_std = std_mdd_candidates_topdown_layer(mdd, l);
         const int layer_size = mdd->layers[l].size();
 
-        bool expanded = true;
-        if (use_topdown_kernel3) {
-            try {
-                expanded = expand_layer_topdown_cpu_kernel3_mdd(mdd, l, mgmr, parallel_mode, threads);
-            } catch (const std::bad_alloc&) {
-                throw_cpu_kernel3_allocation_failure("top-down MDD");
-            }
-            if (!expanded) {
-                throw_cpu_kernel3_allocation_failure("top-down MDD");
-            }
-        } else {
-            expand_layer_topdown_cpu_kernel1_mdd(mdd, l, mgmr, parallel_mode, threads);
-        }
+        expand_layer_topdown_mdd_cpu(mdd, l, mgmr, parallel_mode, threads);
         const long long layer_survivors = count_mdd_survivors_topdown_layer(mdd, l);
         if (stats != NULL) {
             stats->work_candidates_total += layer_candidates;
@@ -256,8 +228,7 @@ ParetoFrontier* coupled_cpu_enumerate(BDD* bdd,
                                      const int problem_type,
                                      const int state_dominance,
                                      EnumerationStats* stats,
-                                     int cpu_threads,
-                                     int cpu_coupled_kernel) {
+                                     int cpu_threads) {
     ParetoFrontierManager* mgmr = new ParetoFrontierManager(bdd->get_width());
     const int threads = cumodd_normalized_cpu_threads(cpu_threads);
     const bool parallel_mode = cumodd_use_parallel_cpu(threads);
@@ -282,26 +253,12 @@ ParetoFrontier* coupled_cpu_enumerate(BDD* bdd,
 
     int val_topdown = 0;
     int val_bottomup = 0;
-    const bool use_coupled_kernel3 = (cpu_coupled_kernel == 3);
-
     while (layer_topdown != layer_bottomup) {
         if (val_topdown <= val_bottomup) {
             const int next_layer = layer_topdown + 1;
             const long long layer_candidates = count_bdd_candidates_topdown_layer(bdd, next_layer, maximization);
             ++layer_topdown;
-            bool expanded = true;
-            if (use_coupled_kernel3) {
-                try {
-                    expanded = expand_layer_topdown_cpu_kernel3_coupled(bdd, layer_topdown, maximization, mgmr, parallel_mode, threads);
-                } catch (const std::bad_alloc&) {
-                    throw_cpu_kernel3_allocation_failure("coupled BDD top-down");
-                }
-                if (!expanded) {
-                    throw_cpu_kernel3_allocation_failure("coupled BDD top-down");
-                }
-            } else {
-                expand_layer_topdown(bdd, layer_topdown, maximization, mgmr, threads);
-            }
+            expand_layer_topdown(bdd, layer_topdown, maximization, mgmr, threads);
             if (metrics_enabled) {
                 stats->cpu_layers_td += 1;
                 stats->cpu_nodes_expanded += bdd->layers[layer_topdown].size();
@@ -332,19 +289,7 @@ ParetoFrontier* coupled_cpu_enumerate(BDD* bdd,
             const int next_layer = layer_bottomup - 1;
             const long long layer_candidates = count_bdd_candidates_bottomup_layer(bdd, next_layer, maximization);
             --layer_bottomup;
-            bool expanded = true;
-            if (use_coupled_kernel3) {
-                try {
-                    expanded = expand_layer_bottomup_cpu_kernel3_coupled(bdd, layer_bottomup, maximization, mgmr, parallel_mode, threads);
-                } catch (const std::bad_alloc&) {
-                    throw_cpu_kernel3_allocation_failure("coupled BDD bottom-up");
-                }
-                if (!expanded) {
-                    throw_cpu_kernel3_allocation_failure("coupled BDD bottom-up");
-                }
-            } else {
-                expand_layer_bottomup(bdd, layer_bottomup, maximization, mgmr, threads);
-            }
+            expand_layer_bottomup(bdd, layer_bottomup, maximization, mgmr, threads);
             if (metrics_enabled) {
                 stats->cpu_layers_bu += 1;
                 stats->cpu_nodes_expanded += bdd->layers[layer_bottomup].size();
@@ -442,7 +387,7 @@ ParetoFrontier* coupled_cpu_enumerate(BDD* bdd,
     return paretoFrontier;
 }
 
-ParetoFrontier* coupled_mdd_cpu_enumerate(MDD* mdd, EnumerationStats* stats, int cpu_threads, int cpu_coupled_kernel) {
+ParetoFrontier* coupled_mdd_cpu_enumerate(MDD* mdd, EnumerationStats* stats, int cpu_threads) {
     ParetoFrontierManager* mgmr = new ParetoFrontierManager(mdd->get_width());
     const int threads = cumodd_normalized_cpu_threads(cpu_threads);
     const bool parallel_mode = cumodd_use_parallel_cpu(threads);
@@ -466,26 +411,12 @@ ParetoFrontier* coupled_mdd_cpu_enumerate(MDD* mdd, EnumerationStats* stats, int
 
     int val_topdown = 0;
     int val_bottomup = 0;
-    const bool use_coupled_kernel3 = (cpu_coupled_kernel == 3);
-
     while (layer_topdown != layer_bottomup) {
         if (val_topdown <= val_bottomup) {
             const int next_layer = layer_topdown + 1;
             const long long layer_candidates = count_mdd_candidates_topdown_layer(mdd, next_layer);
             ++layer_topdown;
-            bool expanded = true;
-            if (use_coupled_kernel3) {
-                try {
-                    expanded = expand_layer_topdown_cpu_kernel3_mdd(mdd, layer_topdown, mgmr, parallel_mode, threads);
-                } catch (const std::bad_alloc&) {
-                    throw_cpu_kernel3_allocation_failure("coupled MDD top-down");
-                }
-                if (!expanded) {
-                    throw_cpu_kernel3_allocation_failure("coupled MDD top-down");
-                }
-            } else {
-                expand_layer_topdown_cpu_kernel1_mdd(mdd, layer_topdown, mgmr, parallel_mode, threads);
-            }
+            expand_layer_topdown_mdd_cpu(mdd, layer_topdown, mgmr, parallel_mode, threads);
             if (metrics_enabled) {
                 stats->cpu_layers_td += 1;
                 stats->cpu_nodes_expanded += mdd->layers[layer_topdown].size();
@@ -507,19 +438,7 @@ ParetoFrontier* coupled_mdd_cpu_enumerate(MDD* mdd, EnumerationStats* stats, int
             const int next_layer = layer_bottomup - 1;
             const long long layer_candidates = count_mdd_candidates_bottomup_layer(mdd, next_layer);
             --layer_bottomup;
-            bool expanded = true;
-            if (use_coupled_kernel3) {
-                try {
-                    expanded = expand_layer_bottomup_cpu_kernel3_mdd(mdd, layer_bottomup, mgmr, parallel_mode, threads);
-                } catch (const std::bad_alloc&) {
-                    throw_cpu_kernel3_allocation_failure("coupled MDD bottom-up");
-                }
-                if (!expanded) {
-                    throw_cpu_kernel3_allocation_failure("coupled MDD bottom-up");
-                }
-            } else {
-                expand_layer_bottomup_cpu_kernel1_mdd(mdd, layer_bottomup, mgmr, parallel_mode, threads);
-            }
+            expand_layer_bottomup_mdd_cpu(mdd, layer_bottomup, mgmr, parallel_mode, threads);
             if (metrics_enabled) {
                 stats->cpu_layers_bu += 1;
                 stats->cpu_nodes_expanded += mdd->layers[layer_bottomup].size();

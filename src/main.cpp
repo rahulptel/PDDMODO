@@ -93,7 +93,6 @@ int main(int argc, char *argv[])
     const int state_dominance = options.state_dominance;
     const Backend backend = options.backend;
     const int cpu_threads = options.cpu_threads;
-    const int cpu_kernel = options.cpu_kernel;
     const bool save_frontier = options.save_frontier;
     const string frontier_out_path = options.frontier_out_path;
     const bool save_stats = options.save_stats;
@@ -231,7 +230,7 @@ int main(int argc, char *argv[])
                 }
             } else {
                 try {
-                    pareto_frontier = MultiobjEnum::pareto_frontier_topdown(mdd, enumeration_stats, cpu_threads, cpu_kernel);
+                    pareto_frontier = MultiobjEnum::pareto_frontier_topdown(mdd, enumeration_stats, cpu_threads);
                 } catch (const std::exception& e) {
                     cout << "Error - CPU backend enumeration failed: " << e.what() << endl;
                     exit(1);
@@ -249,7 +248,7 @@ int main(int argc, char *argv[])
                 }
             } else {
                 try {
-                    pareto_frontier = MultiobjEnum::pareto_frontier_dynamic_layer_cutset(mdd, enumeration_stats, cpu_threads, cpu_kernel);
+                    pareto_frontier = MultiobjEnum::pareto_frontier_dynamic_layer_cutset(mdd, enumeration_stats, cpu_threads);
                 } catch (const std::exception& e) {
                     cout << "Error - CPU backend enumeration failed: " << e.what() << endl;
                     exit(1);
@@ -350,7 +349,7 @@ int main(int argc, char *argv[])
         {
             try
             {
-                pareto_frontier = MultiobjEnum::pareto_frontier_topdown(bdd, maximization, problem_type, state_dominance, enumeration_stats, cpu_threads, cpu_kernel);
+                pareto_frontier = MultiobjEnum::pareto_frontier_topdown(bdd, maximization, problem_type, state_dominance, enumeration_stats, cpu_threads);
             }
             catch (const std::exception &e)
             {
@@ -388,7 +387,7 @@ int main(int argc, char *argv[])
         {
             try
             {
-                pareto_frontier = MultiobjEnum::pareto_frontier_dynamic_layer_cutset(bdd, maximization, problem_type, state_dominance, enumeration_stats, cpu_threads, cpu_kernel);
+                pareto_frontier = MultiobjEnum::pareto_frontier_dynamic_layer_cutset(bdd, maximization, problem_type, state_dominance, enumeration_stats, cpu_threads);
             }
             catch (const std::exception &e)
             {

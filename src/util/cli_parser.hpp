@@ -13,12 +13,6 @@ enum Backend
     BACKEND_GPU = 1
 };
 
-enum CpuKernel
-{
-    CPU_KERNEL_1 = 1,
-    CPU_KERNEL_3 = 3
-};
-
 struct CliOptions
 {
     std::string input_path;
@@ -27,8 +21,6 @@ struct CliOptions
     int state_dominance;
     Backend backend;
     int cpu_threads;
-    int kernel_version;
-    int cpu_kernel;
     bool save_frontier;
     std::string frontier_out_path;
     bool save_stats;

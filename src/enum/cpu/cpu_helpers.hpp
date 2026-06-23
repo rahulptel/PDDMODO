@@ -108,10 +108,6 @@ struct CompareMDDNode {
     }
 };
 
-inline void throw_cpu_kernel3_allocation_failure(const char* context) {
-    throw std::runtime_error(std::string("CPU kernel 3 allocation failure: ") + context);
-}
-
 inline double wall_elapsed_s(const WallClock::time_point& start) {
     return std::chrono::duration_cast<std::chrono::duration<double> >(WallClock::now() - start).count();
 }
@@ -386,17 +382,9 @@ inline long long count_mdd_survivors_bottomup_layer(MDD* mdd, const int layer) {
 void expand_layer_topdown(BDD* bdd, const int l, const bool maximization, ParetoFrontierManager* mgmr, const int cpu_threads);
 void expand_layer_bottomup(BDD* bdd, const int l, const bool maximization, ParetoFrontierManager* mgmr, const int cpu_threads);
 
-void expand_layer_topdown_cpu_kernel1(BDD* bdd, const int layer, const bool maximization, ParetoFrontierManager* mgmr, const bool parallel_mode, const int threads);
-bool expand_layer_topdown_cpu_kernel3(BDD* bdd, const int layer, const bool maximization, ParetoFrontierManager* mgmr, const bool parallel_mode, const int threads);
-
-void expand_layer_topdown_cpu_kernel1_mdd(MDD* mdd, const int l, ParetoFrontierManager* mgmr, const bool parallel_mode, const int threads);
-bool expand_layer_topdown_cpu_kernel3_mdd(MDD* mdd, const int l, ParetoFrontierManager* mgmr, const bool parallel_mode, const int threads);
-
-void expand_layer_bottomup_cpu_kernel1_mdd(MDD* mdd, const int l, ParetoFrontierManager* mgmr, const bool parallel_mode, const int threads);
-bool expand_layer_bottomup_cpu_kernel3_mdd(MDD* mdd, const int l, ParetoFrontierManager* mgmr, const bool parallel_mode, const int threads);
-
-bool expand_layer_topdown_cpu_kernel3_coupled(BDD* bdd, const int layer, const bool maximization, ParetoFrontierManager* mgmr, const bool parallel_mode, const int threads);
-bool expand_layer_bottomup_cpu_kernel3_coupled(BDD* bdd, const int layer, const bool maximization, ParetoFrontierManager* mgmr, const bool parallel_mode, const int threads);
+void expand_layer_topdown_cpu(BDD* bdd, const int layer, const bool maximization, ParetoFrontierManager* mgmr, const bool parallel_mode, const int threads);
+void expand_layer_topdown_mdd_cpu(MDD* mdd, const int l, ParetoFrontierManager* mgmr, const bool parallel_mode, const int threads);
+void expand_layer_bottomup_mdd_cpu(MDD* mdd, const int l, ParetoFrontierManager* mgmr, const bool parallel_mode, const int threads);
 
 int topdown_layer_value(BDD* bdd, Node* node);
 int bottomup_layer_value(BDD* bdd, Node* node);

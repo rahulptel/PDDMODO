@@ -237,8 +237,7 @@ bool write_stats_jsonl(const string &out_path,
     out << "\"method\":" << opts.method << ",";
     out << "\"state_dominance\":" << opts.state_dominance << ",";
     out << "\"backend\":\"" << backend_to_string(opts.backend) << "\",";
-    out << "\"cpu_threads\":" << opts.cpu_threads << ",";
-    out << "\"kernel_version\":" << opts.kernel_version;
+    out << "\"cpu_threads\":" << opts.cpu_threads;
     out << "},";
 
     out << "\"outputs\":{";

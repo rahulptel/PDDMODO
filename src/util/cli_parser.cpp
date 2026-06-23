@@ -18,8 +18,6 @@ CliOptions::CliOptions()
       state_dominance(0),
       backend(BACKEND_CPU),
       cpu_threads(1),
-      kernel_version(0),
-      cpu_kernel(CPU_KERNEL_1),
       save_frontier(false),
       save_stats(false)
 {
@@ -127,11 +125,9 @@ void print_usage()
     cout << "\t\tNamed backend options:\n";
     cout << "\t\t\t--backend cpu|gpu\n";
     cout << "\t\t\t--cpu-threads <N>   (cpu only)\n";
-    cout << "\t\t\t--cpu-kernel <K>    (cpu only, methods 1 and 3, K in {1,3})\n";
-    cout << "\t\t\t--kernel 3          (gpu only, optional compatibility flag)\n";
     cout << "\t\tShorthand backend options:\n";
     cout << "\t\t\tcpu [N]\n";
-    cout << "\t\t\tgpu [3]\n";
+    cout << "\t\t\tgpu\n";
     cout << "\t\tbackend omitted defaults to cpu\n";
 #if CUMODD_HAS_OPENMP
     cout << "\t\tcpu threads default to OMP_NUM_THREADS if valid, otherwise 1\n";
@@ -139,9 +135,6 @@ void print_usage()
     cout << "\t\tthis binary was built without OpenMP: CPU runs serially (1 thread)\n";
     cout << "\t\t--cpu-threads and cpu [N] are unsupported; rebuild with ENABLE_OPENMP=1\n";
 #endif
-
-    cout << "\n";
-    cout << "\t\tGPU uses kernel 3: dynamic blocks per node with binary-search destination lookup (1D grid)\n";
 
     cout << "\n";
     cout << "\t\t--save-frontier: save Pareto frontier to <input_stem>.frontier.csv.gz\n";
@@ -191,9 +184,7 @@ bool parse_cli_args(int argc, char *argv[], CliOptions *out, string *error)
     bool backend_set = false;
     bool backend_from_named = false;
     bool backend_from_shorthand = false;
-    bool kernel_version_set = false;
     bool cpu_threads_set = false;
-    bool cpu_kernel_set = false;
 
     for (int i = 5; i < argc; ++i)
     {
@@ -281,67 +272,6 @@ bool parse_cli_args(int argc, char *argv[], CliOptions *out, string *error)
             }
             cpu_threads_set = true;
         }
-        else if (token == "--kernel")
-        {
-            if (kernel_version_set)
-            {
-                if (error != NULL)
-                {
-                    *error = "Error - kernel provided multiple times.";
-                }
-                return false;
-            }
-            if (i + 1 >= argc)
-            {
-                if (error != NULL)
-                {
-                    *error = "Error - --kernel requires value 3.";
-                }
-                return false;
-            }
-            string value(argv[++i]);
-            if (!parse_positive_int(value, &opts.kernel_version) || opts.kernel_version != 3)
-            {
-                if (error != NULL)
-                {
-                    *error = "Error - invalid --kernel value '" + value + "' (GPU only supports kernel 3).";
-                }
-                return false;
-            }
-            kernel_version_set = true;
-        }
-        else if (token == "--cpu-kernel")
-        {
-            if (cpu_kernel_set)
-            {
-                if (error != NULL)
-                {
-                    *error = "Error - --cpu-kernel provided multiple times.";
-                }
-                return false;
-            }
-            if (i + 1 >= argc)
-            {
-                if (error != NULL)
-                {
-                    *error = "Error - --cpu-kernel requires a value in {1,3}.";
-                }
-                return false;
-            }
-            string value(argv[++i]);
-            int parsed_kernel = 0;
-            if (!parse_positive_int(value, &parsed_kernel) ||
-                (parsed_kernel != CPU_KERNEL_1 && parsed_kernel != CPU_KERNEL_3))
-            {
-                if (error != NULL)
-                {
-                    *error = "Error - invalid --cpu-kernel value '" + value + "' (expected 1 or 3).";
-                }
-                return false;
-            }
-            opts.cpu_kernel = parsed_kernel;
-            cpu_kernel_set = true;
-        }
         else if (token == "cpu" || token == "gpu")
         {
             if (backend_from_named)
@@ -372,50 +302,34 @@ bool parse_cli_args(int argc, char *argv[], CliOptions *out, string *error)
                 char *end_ptr = NULL;
                 long parsed_raw = strtol(next_token.c_str(), &end_ptr, 10);
                 const bool next_is_integer = (errno == 0 && end_ptr != next_token.c_str() && *end_ptr == '\0');
-                if (next_is_integer)
+                if (next_is_integer && token == "gpu")
                 {
-                    if (token == "cpu")
+                    if (error != NULL)
                     {
-                        if (cpu_threads_set)
-                        {
-                            if (error != NULL)
-                            {
-                                *error = "Error - cpu threads provided multiple times.";
-                            }
-                            return false;
-                        }
-                        if (parsed_raw <= 0 || parsed_raw > INT_MAX)
-                        {
-                            if (error != NULL)
-                            {
-                                *error = "Error - invalid cpu shorthand thread count '" + next_token + "' (expected positive integer).";
-                            }
-                            return false;
-                        }
-                        opts.cpu_threads = static_cast<int>(parsed_raw);
-                        cpu_threads_set = true;
+                        *error = "Error - gpu shorthand does not accept a kernel value; use 'gpu'.";
                     }
-                    else
+                    return false;
+                }
+                if (next_is_integer && token == "cpu")
+                {
+                    if (cpu_threads_set)
                     {
-                        if (kernel_version_set)
+                        if (error != NULL)
                         {
-                            if (error != NULL)
-                            {
-                                *error = "Error - kernel provided multiple times.";
-                            }
-                            return false;
+                            *error = "Error - cpu threads provided multiple times.";
                         }
-                        if (parsed_raw != 3)
-                        {
-                            if (error != NULL)
-                            {
-                                *error = "Error - invalid gpu shorthand kernel '" + next_token + "' (GPU only supports kernel 3).";
-                            }
-                            return false;
-                        }
-                        opts.kernel_version = static_cast<int>(parsed_raw);
-                        kernel_version_set = true;
+                        return false;
                     }
+                    if (parsed_raw <= 0 || parsed_raw > INT_MAX)
+                    {
+                        if (error != NULL)
+                        {
+                            *error = "Error - invalid cpu shorthand thread count '" + next_token + "' (expected positive integer).";
+                        }
+                        return false;
+                    }
+                    opts.cpu_threads = static_cast<int>(parsed_raw);
+                    cpu_threads_set = true;
                     ++i;
                 }
             }
@@ -516,35 +430,7 @@ bool parse_cli_args(int argc, char *argv[], CliOptions *out, string *error)
         }
         return false;
     }
-    if (opts.backend == BACKEND_CPU && kernel_version_set)
-    {
-        if (error != NULL)
-        {
-            *error = "Error - --kernel is only valid with backend=gpu.";
-        }
-        return false;
-    }
-    if (opts.backend == BACKEND_GPU && cpu_kernel_set)
-    {
-        if (error != NULL)
-        {
-            *error = "Error - --cpu-kernel is only valid with backend=cpu.";
-        }
-        return false;
-    }
-    if (cpu_kernel_set && opts.method != 1 && opts.method != 3)
-    {
-        if (error != NULL)
-        {
-            *error = "Error - --cpu-kernel is only supported for method 1 (top-down BFS) and method 3 (dynamic layer cutset).";
-        }
-        return false;
-    }
-    if (opts.backend == BACKEND_GPU)
-    {
-        opts.kernel_version = 3;
-    }
-    else if (opts.backend == BACKEND_CPU)
+    if (opts.backend == BACKEND_CPU)
     {
 #if CUMODD_HAS_OPENMP
         if (!cpu_threads_set)

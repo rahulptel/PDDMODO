@@ -441,7 +441,7 @@ bool expand_layer_frontiers(
                         batch_nodes,
                         thrust::raw_pointer_cast(d_batch_alive.data()),
                         thrust::raw_pointer_cast(d_batch_next_sizes.data()));
-                    if (!sync_kernel("batch_dom_v3", reason)) return false;
+                    if (!sync_kernel("batch_dom", reason)) return false;
                 }
             }
 
@@ -532,7 +532,7 @@ bool expand_layer_frontiers(
                 next_nodes,
                 thrust::raw_pointer_cast(d_alive.data()),
                 thrust::raw_pointer_cast(d_next_sizes.data()));
-            if (!sync_kernel("dom_v3", reason)) return false;
+            if (!sync_kernel("dom", reason)) return false;
         }
     }
 
