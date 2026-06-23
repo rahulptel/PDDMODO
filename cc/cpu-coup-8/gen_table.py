@@ -4,10 +4,8 @@ import os
 import re
 
 BACKEND = "cpu"
-INCLUDE_CPU_KERNELS = 1
 CPU_WORKERS = 8
 FORCED_METHOD = 0
-GPU_KERNEL = 3
 
 KNAPSACK_MIN_VARS = 40
 KNAPSACK_MAX_VARS = 70
@@ -48,15 +46,14 @@ def parse_tsp_cities(name: str):
 def append_case(lines, binary, instance, problem_type, method, dominance):
     if BACKEND == "gpu":
         lines.append(
-            f"{binary} {instance} {problem_type} {method} {dominance} --backend gpu --kernel {GPU_KERNEL} --save-frontier --save-stats"
+            f"{binary} {instance} {problem_type} {method} {dominance} --backend gpu --save-frontier --save-stats"
         )
         return
 
-    if INCLUDE_CPU_KERNELS:
-        for cpu_kernel in (1, 3):
-            lines.append(
-                f"{binary} {instance} {problem_type} {method} {dominance} --backend cpu --cpu-threads {CPU_WORKERS} --cpu-kernel {cpu_kernel} --save-frontier --save-stats"
-            )
+    if CPU_WORKERS > 1:
+        lines.append(
+            f"{binary} {instance} {problem_type} {method} {dominance} --backend cpu --cpu-threads {CPU_WORKERS} --save-frontier --save-stats"
+        )
     else:
         lines.append(
             f"{binary} {instance} {problem_type} {method} {dominance} --backend cpu --save-frontier --save-stats"

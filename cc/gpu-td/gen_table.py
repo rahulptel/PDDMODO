@@ -4,7 +4,6 @@ import os
 import re
 
 BACKEND = "gpu"
-INCLUDE_CPU_KERNELS = 0
 CPU_WORKERS = 1
 FORCED_METHOD = 1
 
@@ -49,11 +48,10 @@ def append_case(lines, binary, instance, problem_type, method, dominance):
         )
         return
 
-    if INCLUDE_CPU_KERNELS:
-        for cpu_kernel in (1, 3):
-            lines.append(
-                f"{binary} {instance} {problem_type} {method} {dominance} --backend cpu --cpu-threads {CPU_WORKERS} --cpu-kernel {cpu_kernel} --save-frontier --save-stats"
-            )
+    if CPU_WORKERS > 1:
+        lines.append(
+            f"{binary} {instance} {problem_type} {method} {dominance} --backend cpu --cpu-threads {CPU_WORKERS} --save-frontier --save-stats"
+        )
     else:
         lines.append(
             f"{binary} {instance} {problem_type} {method} {dominance} --backend cpu --save-frontier --save-stats"
