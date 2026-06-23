@@ -41,8 +41,22 @@ if [ -n "${NVCC:-}" ]; then
     NVCC_ARGS=("NVCC=$NVCC")
 fi
 
+if [ "$MACHINE" = "cc" ]; then
+    # Load boost and cuda modules if they are not already available
+    if [ -z "${BOOST_ROOT:-}" ] || ! command -v nvcc >/dev/null 2>&1; then
+        echo "Detected machine=cc with missing boost or cuda. Loading modules..."
+        if [ -f /etc/profile.d/modules.sh ]; then
+            source /etc/profile.d/modules.sh
+        fi
+        if type module >/dev/null 2>&1; then
+            module load boost || true
+            module load cuda || true
+        fi
+    fi
+fi
+
 if [ "$MACHINE" = "cc" ] && [ -z "${BOOST_ROOT:-}" ]; then
-    echo "Error: BOOST_ROOT must be set for machine 'cc'"
+    echo "Error: BOOST_ROOT must be set for machine 'cc' (try: module load boost)"
     exit 1
 fi
 
