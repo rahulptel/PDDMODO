@@ -1,0 +1,28 @@
+commit	wall_enumeration_s	status	description
+eb2320a	475.384	keep	destination-node batched MDD layer expansion cap 2M candidates
+13a5f28	463.056	keep	destination-node batched MDD layer expansion cap 8M candidates
+42efd30	460.181	keep	destination-node batched MDD layer expansion cap 16M candidates
+227bce4	459.976	keep	destination-node batched MDD layer expansion cap 32M candidates
+c4b634f	459.702	keep	destination-node batched MDD layer expansion cap 64M candidates
+7f73dcc	-1	crash	cap 128M candidate batch OOM
+adb1a57	459.140	keep	destination-node batched MDD layer expansion cap 96M candidates
+ff38eb8	459.856	discard	cap 112M correct but slower than 96M incumbent
+54b5d46	459.600	discard	cap 104M correct but slower than 96M incumbent
+0acedd0	455.134	keep	reuse packed edge arrays and existing edge counts in MDD batches
+8c8cd84	458.808	discard	packed-edge cap 112M correct but slower than 96M packed incumbent
+070f63f	460.957	discard	offset-derived batch expansion correct but slower
+7e4c412	458.713	discard	packed-edge cap 88M correct but slower than 96M packed incumbent
+488895b	460.218	discard	host precomputed batch block offsets correct but slower
+67d5c88	458.707	discard	packed-edge cap 100M correct but slower than 96M packed incumbent
+dfdecdc	457.012	discard	single final concatenation of MDD batch outputs correct but slower
+85f282d	458.467	discard	removed explicit zero fill correct but slower
+54aaac1	457.007	discard	batch survivor total from node counts correct but slower
+d3b063d	455.365	discard	256-thread MDD CUDA blocks correct but slower
+1243d0e	474.362	discard	remove redundant MDD max segment reductions correct but slower
+dfaf37a	458.864	discard	reuse MDD batch block counts correct but slower
+d611844	475.535	discard	virtual MDD batch candidates correct but slower
+cb87139	233.504	keep	short-circuit MDD dominance comparisons
+d0a8c59	235.906	discard	short-circuit coupled dominance kernels correct but slower
+2908f0d	233.548	discard	stop dominated MDD tile scans correct but slower
+25b9c91	231.606	keep	count full MDD survivors by node
+bc6cf1d	232.555	discard	derive MDD dominance block totals from scan correct but slower
