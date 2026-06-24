@@ -96,9 +96,9 @@ __global__ void count_destination_candidates_kernel(const int* in_edge_offsets,
                                                     int* dst_blocks) {
     const int dst = blockIdx.x * blockDim.x + threadIdx.x;
     if (dst >= next_nodes) return;
-    const int eb = in_edge_offsets[dst];
-    const int ee = in_edge_offsets[dst + 1];
-    const int count = edge_offsets[ee] - edge_offsets[eb];
+    const int edge_begin = in_edge_offsets[dst];
+    const int edge_end = in_edge_offsets[dst + 1];
+    const int count = edge_offsets[edge_end] - edge_offsets[edge_begin];
     dst_counts[dst] = count;
     if (dst_blocks) {
         dst_blocks[dst] = ceil_div(count, kThreadsPerBlock);
@@ -113,25 +113,25 @@ __global__ void materialize_edge_candidates_kernel(const int* edge_src,
                                                 const ObjType* prev_points,
                                                 int num_edges,
                                                 ObjType* cand_points) {
-    const int gt = blockIdx.x * blockDim.x + threadIdx.x;
-    const int gw = gt / kWarpSize;
-    const int lane = gt & (kWarpSize - 1);
-    const int tw = (gridDim.x * blockDim.x) / kWarpSize;
-    if (tw <= 0) return;
+    const int global_thread = blockIdx.x * blockDim.x + threadIdx.x;
+    const int global_warp = global_thread / kWarpSize;
+    const int lane = global_thread & (kWarpSize - 1);
+    const int total_warps = (gridDim.x * blockDim.x) / kWarpSize;
+    if (total_warps <= 0) return;
 
-    for (int e = gw; e < num_edges; e += tw) {
+    for (int e = global_warp; e < num_edges; e += total_warps) {
         const int src = edge_src[e];
-        const int sb = prev_offsets[src];
-        const int ob = edge_offsets[e];
-        const int cnt = edge_counts[e];
+        const int src_begin = prev_offsets[src];
+        const int out_begin = edge_offsets[e];
+        const int count = edge_counts[e];
         const ObjType* w = edge_weights + e * NOBJS;
 
-        for (int k = lane; k < cnt; k += kWarpSize) {
-            const int si = sb + k;
-            const int oi = ob + k;
+        for (int k = lane; k < count; k += kWarpSize) {
+            const int src_idx = src_begin + k;
+            const int out_idx = out_begin + k;
             #pragma unroll
             for (int o = 0; o < NOBJS; ++o)
-                cand_points[oi * NOBJS + o] = prev_points[si * NOBJS + o] + w[o];
+                cand_points[out_idx * NOBJS + o] = prev_points[src_idx * NOBJS + o] + w[o];
         }
     }
 }
@@ -158,47 +158,47 @@ __global__ void mark_local_dominated_kernel(const ObjType* points,
                                          int next_nodes,
                                          int* alive,
                                          int* next_sizes) {
-    const int block_index = blockIdx.x;
-    const int dst = find_dst_node(block_index, block_offsets, next_nodes);
+    const int block_idx = blockIdx.x;
+    const int dst = find_dst_node(block_idx, block_offsets, next_nodes);
     if (dst >= next_nodes) return;
 
-    const int tile_i = block_index - block_offsets[dst];
+    const int tile_i = block_idx - block_offsets[dst];
 
-    const int eb = in_edge_offsets[dst];
-    const int ee = in_edge_offsets[dst + 1];
-    const int begin = edge_offsets[eb];
-    const int end = edge_offsets[ee];
+    const int edge_begin = in_edge_offsets[dst];
+    const int edge_end = in_edge_offsets[dst + 1];
+    const int begin = edge_offsets[edge_begin];
+    const int end = edge_offsets[edge_end];
     const int len = end - begin;
 
-    const int li = tile_i * blockDim.x + threadIdx.x;
-    const bool valid = (li < len);
-    const int i = begin + li;
+    const int local_i = tile_i * blockDim.x + threadIdx.x;
+    const bool valid_i = (local_i < len);
+    const int i = begin + local_i;
 
-    ObjType pi[NOBJS];
-    if (valid) {
+    ObjType point_i[NOBJS];
+    if (valid_i) {
         #pragma unroll
-        for (int o = 0; o < NOBJS; ++o) pi[o] = points[i * NOBJS + o];
+        for (int o = 0; o < NOBJS; ++o) point_i[o] = points[i * NOBJS + o];
     }
 
-    bool dom = false;
-    __shared__ ObjType sh[kThreadsPerBlock * NOBJS];
-    for (int jb = 0; jb < len; jb += blockDim.x) {
-        const int jl = jb + threadIdx.x;
-        if (jl < len) {
-            const int j = begin + jl;
+    bool dominated = false;
+    __shared__ ObjType sh_points[kThreadsPerBlock * NOBJS];
+    for (int j_base = 0; j_base < len; j_base += blockDim.x) {
+        const int j_local = j_base + threadIdx.x;
+        if (j_local < len) {
+            const int j = begin + j_local;
             #pragma unroll
             for (int o = 0; o < NOBJS; ++o)
-                sh[threadIdx.x * NOBJS + o] = points[j * NOBJS + o];
+                sh_points[threadIdx.x * NOBJS + o] = points[j * NOBJS + o];
         }
         __syncthreads();
-        if (valid && !dom) {
-            const int tc = min(len - jb, (int)blockDim.x);
-            for (int jj = 0; jj < tc; ++jj) {
-                const int lj = jb + jj;
+        if (valid_i && !dominated) {
+            const int tile_count = min(len - j_base, (int)blockDim.x);
+            for (int jj = 0; jj < tile_count; ++jj) {
+                const int local_j = j_base + jj;
 
-                if (lj == li) continue;
-                if (dominates_or_tie_before(&sh[jj * NOBJS], pi, lj < li)) {
-                    dom = true;
+                if (local_j == local_i) continue;
+                if (dominates_or_tie_before(&sh_points[jj * NOBJS], point_i, local_j < local_i)) {
+                    dominated = true;
                     break;
                 }
             }
@@ -206,29 +206,29 @@ __global__ void mark_local_dominated_kernel(const ObjType* points,
         __syncthreads();
     }
 
-    const int keep = (valid && !dom) ? 1 : 0;
-    if (valid) alive[i] = keep;
+    const int keep = (valid_i && !dominated) ? 1 : 0;
+    if (valid_i) alive[i] = keep;
 
-    __shared__ int lv[kThreadsPerBlock];
-    lv[threadIdx.x] = keep;
+    __shared__ int live_sh[kThreadsPerBlock];
+    live_sh[threadIdx.x] = keep;
     __syncthreads();
-    for (int off = blockDim.x / 2; off > 0; off >>= 1) {
-        if (threadIdx.x < off) lv[threadIdx.x] += lv[threadIdx.x + off];
+    for (int offset = blockDim.x / 2; offset > 0; offset >>= 1) {
+        if (threadIdx.x < offset) live_sh[threadIdx.x] += live_sh[threadIdx.x + offset];
         __syncthreads();
     }
-    if (threadIdx.x == 0) atomicAdd(&next_sizes[dst], lv[0]);
+    if (threadIdx.x == 0) atomicAdd(&next_sizes[dst], live_sh[0]);
 }
 
 __global__ void compact_alive_points_kernel(const int* alive,
-                                     const int* prefix,
-                                     const ObjType* in_pts,
-                                     ObjType* out_pts,
-                                     int n) {
+                                     const int* alive_prefix,
+                                     const ObjType* in_points,
+                                     ObjType* out_points,
+                                     int num_points) {
     const int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i >= n || !alive[i]) return;
-    const int oi = prefix[i];
+    if (i >= num_points || !alive[i]) return;
+    const int out_idx = alive_prefix[i];
     for (int o = 0; o < NOBJS; ++o)
-        out_pts[oi * NOBJS + o] = in_pts[i * NOBJS + o];
+        out_points[out_idx * NOBJS + o] = in_points[i * NOBJS + o];
 }
 
 // Layer-value heuristic: sum_i( sizes[i] * arc_counts[i] )
@@ -290,47 +290,47 @@ bool expand_layer_frontiers(
     }
 
     // Per-edge candidate counts
-    thrust::device_vector<int> d_ec(num_edges, 0);
-    thrust::device_vector<int> d_eo(num_edges + 1, 0);
+    thrust::device_vector<int> d_edge_counts(num_edges, 0);
+    thrust::device_vector<int> d_edge_offsets(num_edges + 1, 0);
 
     count_edge_candidates_kernel<<<ceil_div(num_edges, kThreadsPerBlock), kThreadsPerBlock>>>(
         thrust::raw_pointer_cast(edge_src.data()),
         thrust::raw_pointer_cast(d_prev_offsets.data()),
-        thrust::raw_pointer_cast(d_ec.data()),
+        thrust::raw_pointer_cast(d_edge_counts.data()),
         num_edges);
     if (!sync_kernel("edge_counts", reason)) return false;
 
-    thrust::exclusive_scan(d_ec.begin(), d_ec.end(), d_eo.begin());
-    const int lo = d_eo[num_edges - 1];
-    const int lc = d_ec[num_edges - 1];
-    const int total_cand = lo + lc;
+    thrust::exclusive_scan(d_edge_counts.begin(), d_edge_counts.end(), d_edge_offsets.begin());
+    const int last_offset = d_edge_offsets[num_edges - 1];
+    const int last_count = d_edge_counts[num_edges - 1];
+    const int total_candidates = last_offset + last_count;
     if (total_candidates_out != NULL) {
-        *total_candidates_out = total_cand;
+        *total_candidates_out = total_candidates;
     }
-    d_eo[num_edges] = total_cand;
+    d_edge_offsets[num_edges] = total_candidates;
 
-    if (total_cand == 0) {
+    if (total_candidates == 0) {
         d_next_points.clear();
         return true;
     }
 
-    thrust::device_vector<int> d_cc(next_nodes, 0);
-    thrust::device_vector<int> d_blocks(next_nodes, 0);
+    thrust::device_vector<int> d_cand_counts(next_nodes, 0);
+    thrust::device_vector<int> d_dst_blocks(next_nodes, 0);
 
     count_destination_candidates_kernel<<<ceil_div(next_nodes, kThreadsPerBlock), kThreadsPerBlock>>>(
         thrust::raw_pointer_cast(in_edge_offsets.data()),
-        thrust::raw_pointer_cast(d_eo.data()),
+        thrust::raw_pointer_cast(d_edge_offsets.data()),
         next_nodes,
-        thrust::raw_pointer_cast(d_cc.data()),
-        thrust::raw_pointer_cast(d_blocks.data()));
+        thrust::raw_pointer_cast(d_cand_counts.data()),
+        thrust::raw_pointer_cast(d_dst_blocks.data()));
     if (!sync_kernel("dst_counts", reason)) return false;
     if (std_candidates_out != NULL) {
-        *std_candidates_out = population_std_from_device_counts(d_cc);
+        *std_candidates_out = population_std_from_device_counts(d_cand_counts);
     }
 
-    if (total_cand > max_candidate_points_per_batch) {
+    if (total_candidates > max_candidate_points_per_batch) {
         thrust::host_vector<int> h_in_edge_offsets = in_edge_offsets;
-        thrust::host_vector<int> h_eo = d_eo;
+        thrust::host_vector<int> h_edge_offsets = d_edge_offsets;
 
         d_next_points.clear();
         d_next_sizes.assign(next_nodes, 0);
@@ -339,13 +339,13 @@ bool expand_layer_frontiers(
         while (dst_begin < next_nodes) {
             int dst_end = dst_begin + 1;
             long long batch_candidates =
-                static_cast<long long>(h_eo[h_in_edge_offsets[dst_end]]) -
-                static_cast<long long>(h_eo[h_in_edge_offsets[dst_begin]]);
+                static_cast<long long>(h_edge_offsets[h_in_edge_offsets[dst_end]]) -
+                static_cast<long long>(h_edge_offsets[h_in_edge_offsets[dst_begin]]);
 
             while (dst_end < next_nodes && batch_candidates < max_candidate_points_per_batch) {
                 const long long next_candidates =
-                    static_cast<long long>(h_eo[h_in_edge_offsets[dst_end + 1]]) -
-                    static_cast<long long>(h_eo[h_in_edge_offsets[dst_begin]]);
+                    static_cast<long long>(h_edge_offsets[h_in_edge_offsets[dst_end + 1]]) -
+                    static_cast<long long>(h_edge_offsets[h_in_edge_offsets[dst_begin]]);
                 if (next_candidates > max_candidate_points_per_batch && batch_candidates > 0) {
                     break;
                 }
@@ -368,30 +368,30 @@ bool expand_layer_frontiers(
                 h_batch_in_offsets[i] = h_in_edge_offsets[dst_begin + i] - edge_begin;
             }
             thrust::device_vector<int> d_batch_in_offsets = h_batch_in_offsets;
-            thrust::device_vector<int> d_batch_eo(batch_edges + 1, 0);
+            thrust::device_vector<int> d_batch_edge_offsets(batch_edges + 1, 0);
 
-            thrust::exclusive_scan(d_ec.begin() + edge_begin,
-                                   d_ec.begin() + edge_end,
-                                   d_batch_eo.begin());
-            const int batch_last_offset = d_batch_eo[batch_edges - 1];
-            const int batch_last_count = d_ec[edge_end - 1];
-            const int batch_total_cand = batch_last_offset + batch_last_count;
-            d_batch_eo[batch_edges] = batch_total_cand;
-            if (batch_total_cand <= 0) {
+            thrust::exclusive_scan(d_edge_counts.begin() + edge_begin,
+                                   d_edge_counts.begin() + edge_end,
+                                   d_batch_edge_offsets.begin());
+            const int batch_last_offset = d_batch_edge_offsets[batch_edges - 1];
+            const int batch_last_count = d_edge_counts[edge_end - 1];
+            const int batch_total_candidates = batch_last_offset + batch_last_count;
+            d_batch_edge_offsets[batch_edges] = batch_total_candidates;
+            if (batch_total_candidates <= 0) {
                 dst_begin = dst_end;
                 continue;
             }
 
-            thrust::device_vector<ObjType> d_batch_cand(batch_total_cand * NOBJS, 0);
+            thrust::device_vector<ObjType> d_batch_cand_points(batch_total_candidates * NOBJS, 0);
             materialize_edge_candidates_kernel<<<ceil_div(batch_edges, kThreadsPerBlock), kThreadsPerBlock>>>(
                 thrust::raw_pointer_cast(edge_src.data()) + edge_begin,
                 thrust::raw_pointer_cast(edge_weights.data()) + edge_begin * NOBJS,
-                thrust::raw_pointer_cast(d_batch_eo.data()),
-                thrust::raw_pointer_cast(d_ec.data()) + edge_begin,
+                thrust::raw_pointer_cast(d_batch_edge_offsets.data()),
+                thrust::raw_pointer_cast(d_edge_counts.data()) + edge_begin,
                 thrust::raw_pointer_cast(d_prev_offsets.data()),
                 thrust::raw_pointer_cast(d_prev_points.data()),
                 batch_edges,
-                thrust::raw_pointer_cast(d_batch_cand.data()));
+                thrust::raw_pointer_cast(d_batch_cand_points.data()));
             if (!sync_kernel("batch_expand_cand", reason)) return false;
 
             if (gpu_mem_baseline_used_bytes != NULL &&
@@ -411,19 +411,19 @@ bool expand_layer_frontiers(
             thrust::device_vector<int> d_batch_blocks(batch_nodes, 0);
             count_destination_candidates_kernel<<<ceil_div(batch_nodes, kThreadsPerBlock), kThreadsPerBlock>>>(
                 thrust::raw_pointer_cast(d_batch_in_offsets.data()),
-                thrust::raw_pointer_cast(d_batch_eo.data()),
+                thrust::raw_pointer_cast(d_batch_edge_offsets.data()),
                 batch_nodes,
                 thrust::raw_pointer_cast(d_batch_sizes.data()),
                 thrust::raw_pointer_cast(d_batch_blocks.data()));
             if (!sync_kernel("batch_dst_counts", reason)) return false;
 
-            thrust::device_vector<int> d_batch_alive(batch_total_cand, 0);
+            thrust::device_vector<int> d_batch_alive(batch_total_candidates, 0);
             thrust::device_vector<int> d_batch_next_sizes(batch_nodes, 0);
-            const int max_seg = thrust::reduce(d_batch_sizes.begin(),
+            const int max_seg_size = thrust::reduce(d_batch_sizes.begin(),
                                                d_batch_sizes.end(),
                                                0,
                                                thrust::maximum<int>());
-            if (max_seg > 0) {
+            if (max_seg_size > 0) {
                 thrust::device_vector<int> d_batch_block_offsets(batch_nodes + 1, 0);
                 thrust::exclusive_scan(d_batch_blocks.begin(),
                                        d_batch_blocks.end(),
@@ -434,9 +434,9 @@ bool expand_layer_frontiers(
                 const int total_blocks = d_batch_block_offsets[batch_nodes];
                 if (total_blocks > 0) {
                     mark_local_dominated_kernel<<<total_blocks, kThreadsPerBlock>>>(
-                        thrust::raw_pointer_cast(d_batch_cand.data()),
+                        thrust::raw_pointer_cast(d_batch_cand_points.data()),
                         thrust::raw_pointer_cast(d_batch_in_offsets.data()),
-                        thrust::raw_pointer_cast(d_batch_eo.data()),
+                        thrust::raw_pointer_cast(d_batch_edge_offsets.data()),
                         thrust::raw_pointer_cast(d_batch_block_offsets.data()),
                         batch_nodes,
                         thrust::raw_pointer_cast(d_batch_alive.data()),
@@ -445,7 +445,7 @@ bool expand_layer_frontiers(
                 }
             }
 
-            thrust::device_vector<int> d_batch_alive_prefix(batch_total_cand, 0);
+            thrust::device_vector<int> d_batch_alive_prefix(batch_total_candidates, 0);
             thrust::exclusive_scan(d_batch_alive.begin(),
                                    d_batch_alive.end(),
                                    d_batch_alive_prefix.begin());
@@ -453,12 +453,12 @@ bool expand_layer_frontiers(
 
             thrust::device_vector<ObjType> d_batch_next_points(batch_total_next * NOBJS, 0);
             if (batch_total_next > 0) {
-                compact_alive_points_kernel<<<ceil_div(batch_total_cand, kThreadsPerBlock), kThreadsPerBlock>>>(
+                compact_alive_points_kernel<<<ceil_div(batch_total_candidates, kThreadsPerBlock), kThreadsPerBlock>>>(
                     thrust::raw_pointer_cast(d_batch_alive.data()),
                     thrust::raw_pointer_cast(d_batch_alive_prefix.data()),
-                    thrust::raw_pointer_cast(d_batch_cand.data()),
+                    thrust::raw_pointer_cast(d_batch_cand_points.data()),
                     thrust::raw_pointer_cast(d_batch_next_points.data()),
-                    batch_total_cand);
+                    batch_total_candidates);
                 if (!sync_kernel("batch_scatter", reason)) return false;
 
                 const size_t old_size = d_next_points.size();
@@ -489,16 +489,16 @@ bool expand_layer_frontiers(
     }
 
     // Expand candidate points
-    thrust::device_vector<ObjType> d_cand(total_cand * NOBJS, 0);
+    thrust::device_vector<ObjType> d_cand_points(total_candidates * NOBJS, 0);
     materialize_edge_candidates_kernel<<<ceil_div(num_edges, kThreadsPerBlock), kThreadsPerBlock>>>(
         thrust::raw_pointer_cast(edge_src.data()),
         thrust::raw_pointer_cast(edge_weights.data()),
-        thrust::raw_pointer_cast(d_eo.data()),
-        thrust::raw_pointer_cast(d_ec.data()),
+        thrust::raw_pointer_cast(d_edge_offsets.data()),
+        thrust::raw_pointer_cast(d_edge_counts.data()),
         thrust::raw_pointer_cast(d_prev_offsets.data()),
         thrust::raw_pointer_cast(d_prev_points.data()),
         num_edges,
-        thrust::raw_pointer_cast(d_cand.data()));
+        thrust::raw_pointer_cast(d_cand_points.data()));
     if (!sync_kernel("expand_cand", reason)) return false;
     // Primary peak checkpoint: candidate points are fully materialized and not yet compacted by dominance.
     if (gpu_mem_baseline_used_bytes != NULL &&
@@ -514,20 +514,20 @@ bool expand_layer_frontiers(
         }
     }
 
-    thrust::device_vector<int> d_alive(total_cand, 0);
+    thrust::device_vector<int> d_alive(total_candidates, 0);
 
-    const int max_seg = thrust::reduce(d_cc.begin(), d_cc.end(), 0, thrust::maximum<int>());
-    if (max_seg > 0) {
+    const int max_seg_size = thrust::reduce(d_cand_counts.begin(), d_cand_counts.end(), 0, thrust::maximum<int>());
+    if (max_seg_size > 0) {
         thrust::device_vector<int> d_block_offsets(next_nodes + 1, 0);
-        thrust::exclusive_scan(d_blocks.begin(), d_blocks.end(), d_block_offsets.begin());
-        d_block_offsets[next_nodes] = thrust::reduce(d_blocks.begin(), d_blocks.end(), 0);
+        thrust::exclusive_scan(d_dst_blocks.begin(), d_dst_blocks.end(), d_block_offsets.begin());
+        d_block_offsets[next_nodes] = thrust::reduce(d_dst_blocks.begin(), d_dst_blocks.end(), 0);
 
         const int total_blocks = d_block_offsets[next_nodes];
         if (total_blocks > 0) {
             mark_local_dominated_kernel<<<total_blocks, kThreadsPerBlock>>>(
-                thrust::raw_pointer_cast(d_cand.data()),
+                thrust::raw_pointer_cast(d_cand_points.data()),
                 thrust::raw_pointer_cast(in_edge_offsets.data()),
-                thrust::raw_pointer_cast(d_eo.data()),
+                thrust::raw_pointer_cast(d_edge_offsets.data()),
                 thrust::raw_pointer_cast(d_block_offsets.data()),
                 next_nodes,
                 thrust::raw_pointer_cast(d_alive.data()),
@@ -537,8 +537,8 @@ bool expand_layer_frontiers(
     }
 
     // Compact surviving points
-    thrust::device_vector<int> d_ap(total_cand, 0);
-    thrust::exclusive_scan(d_alive.begin(), d_alive.end(), d_ap.begin());
+    thrust::device_vector<int> d_alive_prefix(total_candidates, 0);
+    thrust::exclusive_scan(d_alive.begin(), d_alive.end(), d_alive_prefix.begin());
     const int total_next = thrust::reduce(d_next_sizes.begin(), d_next_sizes.end(), 0);
     if (total_next_out != NULL) {
         *total_next_out = total_next;
@@ -552,12 +552,12 @@ bool expand_layer_frontiers(
 
     d_next_points.resize(total_next * NOBJS);
     if (total_next > 0) {
-        compact_alive_points_kernel<<<ceil_div(total_cand, kThreadsPerBlock), kThreadsPerBlock>>>(
+        compact_alive_points_kernel<<<ceil_div(total_candidates, kThreadsPerBlock), kThreadsPerBlock>>>(
             thrust::raw_pointer_cast(d_alive.data()),
-            thrust::raw_pointer_cast(d_ap.data()),
-            thrust::raw_pointer_cast(d_cand.data()),
+            thrust::raw_pointer_cast(d_alive_prefix.data()),
+            thrust::raw_pointer_cast(d_cand_points.data()),
             thrust::raw_pointer_cast(d_next_points.data()),
-            total_cand);
+            total_candidates);
         if (!sync_kernel("scatter", reason)) return false;
     }
     return true;
