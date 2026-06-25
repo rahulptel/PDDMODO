@@ -10,14 +10,9 @@
 const long long DEFAULT_GPU_BATCH_SIZE = 20000000LL;
 const long long DEFAULT_GPU_MAX_PROD = 625000LL;
 
-enum Backend
-{
-    BACKEND_CPU = 0,
-    BACKEND_GPU = 1
-};
+enum Backend { BACKEND_CPU = 0, BACKEND_GPU = 1 };
 
-struct CliOptions
-{
+struct CliOptions {
     std::string input_path;
     int problem_type;
     int method;

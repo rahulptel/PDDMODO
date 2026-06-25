@@ -7,11 +7,10 @@
 
 #include "../../util/util.hpp"
 
-static __device__ __forceinline__ bool dominates_or_tie_before(const ObjType* lhs,
-                                                               const ObjType* rhs,
-                                                               bool tie_before) {
+static __device__ __forceinline__ bool
+dominates_or_tie_before(const ObjType *lhs, const ObjType *rhs, bool tie_before) {
     bool strict = false;
-    #pragma unroll
+#pragma unroll
     for (int o = 0; o < NOBJS; ++o) {
         const ObjType a = lhs[o];
         const ObjType b = rhs[o];

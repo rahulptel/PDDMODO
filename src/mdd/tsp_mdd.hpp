@@ -9,20 +9,19 @@
 #include "../instances/tsp_instance.hpp"
 #include "mdd.hpp"
 
-
 //
 // TSP MDD constructor
 //
 class MDDTSPConstructor {
-    public:
-        // Constructor
-        MDDTSPConstructor(TSPInstance* _inst);
+  public:
+    // Constructor
+    MDDTSPConstructor(TSPInstance *_inst);
 
-        // Generate exact 
-        MDD* generate_exact();
+    // Generate exact
+    MDD *generate_exact();
 
-    private:
-        TSPInstance* inst;
+  private:
+    TSPInstance *inst;
 };
 
 #endif

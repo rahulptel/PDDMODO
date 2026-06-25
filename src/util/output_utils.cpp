@@ -1,23 +1,18 @@
-#include <iostream>
-#include <fstream>
-#include <iomanip>
-#include <cstdio>
 #include "output_utils.hpp"
 #include "util.hpp"
+#include <cstdio>
+#include <fstream>
+#include <iomanip>
+#include <iostream>
 
 using namespace std;
 
-static string shell_single_quote(const string &value)
-{
+static string shell_single_quote(const string &value) {
     string quoted = "'";
-    for (char c : value)
-    {
-        if (c == '\'')
-        {
+    for (char c : value) {
+        if (c == '\'') {
             quoted += "'\"'\"'";
-        }
-        else
-        {
+        } else {
             quoted += c;
         }
     }
@@ -25,15 +20,12 @@ static string shell_single_quote(const string &value)
     return quoted;
 }
 
-static string json_escape(const string &value)
-{
+static string json_escape(const string &value) {
     string escaped;
     escaped.reserve(value.size());
-    for (size_t i = 0; i < value.size(); ++i)
-    {
+    for (size_t i = 0; i < value.size(); ++i) {
         const unsigned char c = static_cast<unsigned char>(value[i]);
-        switch (c)
-        {
+        switch (c) {
         case '\"':
             escaped += "\\\"";
             break;
@@ -56,15 +48,12 @@ static string json_escape(const string &value)
             escaped += "\\t";
             break;
         default:
-            if (c < 0x20)
-            {
+            if (c < 0x20) {
                 static const char hex[] = "0123456789abcdef";
                 escaped += "\\u00";
                 escaped += hex[(c >> 4) & 0x0F];
                 escaped += hex[c & 0x0F];
-            }
-            else
-            {
+            } else {
                 escaped += static_cast<char>(c);
             }
             break;
@@ -73,13 +62,10 @@ static string json_escape(const string &value)
     return escaped;
 }
 
-static void write_json_long_array(ostream &out, const vector<long> &values)
-{
+static void write_json_long_array(ostream &out, const vector<long> &values) {
     out << "[";
-    for (size_t i = 0; i < values.size(); ++i)
-    {
-        if (i > 0)
-        {
+    for (size_t i = 0; i < values.size(); ++i) {
+        if (i > 0) {
             out << ",";
         }
         out << values[i];
@@ -87,13 +73,10 @@ static void write_json_long_array(ostream &out, const vector<long> &values)
     out << "]";
 }
 
-static void write_json_double_array(ostream &out, const vector<double> &values)
-{
+static void write_json_double_array(ostream &out, const vector<double> &values) {
     out << "[";
-    for (size_t i = 0; i < values.size(); ++i)
-    {
-        if (i > 0)
-        {
+    for (size_t i = 0; i < values.size(); ++i) {
+        if (i > 0) {
             out << ",";
         }
         out << values[i];
@@ -101,30 +84,24 @@ static void write_json_double_array(ostream &out, const vector<double> &values)
     out << "]";
 }
 
-bool write_frontier_gzip_csv(const ParetoFrontier *frontier, const string &out_path, string *error)
-{
-    if (frontier == NULL)
-    {
-        if (error != NULL)
-        {
+bool write_frontier_gzip_csv(const ParetoFrontier *frontier, const string &out_path,
+                             string *error) {
+    if (frontier == NULL) {
+        if (error != NULL) {
             *error = "frontier is null";
         }
         return false;
     }
 
-    if (out_path.empty())
-    {
-        if (error != NULL)
-        {
+    if (out_path.empty()) {
+        if (error != NULL) {
             *error = "output path is empty";
         }
         return false;
     }
 
-    if (frontier->sols.size() % NOBJS != 0)
-    {
-        if (error != NULL)
-        {
+    if (frontier->sols.size() % NOBJS != 0) {
+        if (error != NULL) {
             *error = "frontier has invalid dimension";
         }
         return false;
@@ -132,51 +109,40 @@ bool write_frontier_gzip_csv(const ParetoFrontier *frontier, const string &out_p
 
     const string command = "gzip -c > " + shell_single_quote(out_path);
     FILE *pipe = popen(command.c_str(), "w");
-    if (pipe == NULL)
-    {
-        if (error != NULL)
-        {
+    if (pipe == NULL) {
+        if (error != NULL) {
             *error = "could not launch gzip";
         }
         return false;
     }
 
     bool ok = true;
-    for (size_t i = 0; i < frontier->sols.size() && ok; i += NOBJS)
-    {
-        for (int o = 0; o < NOBJS; ++o)
-        {
-            if (o > 0 && fputc(',', pipe) == EOF)
-            {
+    for (size_t i = 0; i < frontier->sols.size() && ok; i += NOBJS) {
+        for (int o = 0; o < NOBJS; ++o) {
+            if (o > 0 && fputc(',', pipe) == EOF) {
                 ok = false;
                 break;
             }
-            if (fprintf(pipe, "%d", frontier->sols[i + o]) < 0)
-            {
+            if (fprintf(pipe, "%d", frontier->sols[i + o]) < 0) {
                 ok = false;
                 break;
             }
         }
-        if (ok && fputc('\n', pipe) == EOF)
-        {
+        if (ok && fputc('\n', pipe) == EOF) {
             ok = false;
         }
     }
 
     int close_status = pclose(pipe);
-    if (!ok)
-    {
-        if (error != NULL)
-        {
+    if (!ok) {
+        if (error != NULL) {
             *error = "failed while writing compressed frontier";
         }
         return false;
     }
 
-    if (close_status != 0)
-    {
-        if (error != NULL)
-        {
+    if (close_status != 0) {
+        if (error != NULL) {
             *error = "gzip exited with non-zero status";
         }
         return false;
@@ -185,17 +151,11 @@ bool write_frontier_gzip_csv(const ParetoFrontier *frontier, const string &out_p
     return true;
 }
 
-bool write_stats_jsonl(const string &out_path,
-                       const CliOptions &opts,
-                       const EnumerationStats *stats,
-                       const DDStats &record,
-                       string *error)
-{
+bool write_stats_jsonl(const string &out_path, const CliOptions &opts,
+                       const EnumerationStats *stats, const DDStats &record, string *error) {
     ofstream out(out_path.c_str(), ios::out | ios::app);
-    if (!out.is_open())
-    {
-        if (error != NULL)
-        {
+    if (!out.is_open()) {
+        if (error != NULL) {
             *error = "could not open output path";
         }
         return false;
@@ -213,21 +173,22 @@ bool write_stats_jsonl(const string &out_path,
     const double kernel_total_s = stats != NULL ? stats->kernel_total_s : 0.0;
     const long long cpu_mem_peak_bytes = stats != NULL ? stats->cpu_mem_peak_bytes : 0;
     const long long gpu_mem_peak_used_bytes = stats != NULL ? stats->gpu_mem_peak_used_bytes : 0;
-    const long long gpu_mem_peak_reserved_bytes = stats != NULL ? stats->gpu_mem_peak_reserved_bytes : 0;
+    const long long gpu_mem_peak_reserved_bytes =
+        stats != NULL ? stats->gpu_mem_peak_reserved_bytes : 0;
     const int layer_coupling = stats != NULL ? stats->layer_coupling : 0;
     const int dominance_filtered_total = stats != NULL ? stats->dominance_filtered_total : 0;
     const long long work_candidates_total = stats != NULL ? stats->work_candidates_total : 0;
     const long long work_candidates_peak = stats != NULL ? stats->work_candidates_peak : 0;
-    const long long work_frontier_survivors_total = stats != NULL ? stats->work_frontier_survivors_total : 0;
-    const long long work_frontier_peak_points = stats != NULL ? stats->work_frontier_peak_points : 0;
+    const long long work_frontier_survivors_total =
+        stats != NULL ? stats->work_frontier_survivors_total : 0;
+    const long long work_frontier_peak_points =
+        stats != NULL ? stats->work_frontier_peak_points : 0;
     const long long work_join_products_total = stats != NULL ? stats->work_join_products_total : 0;
     static const vector<double> kEmptyDoubleVector;
-    const vector<double> &std_candidates_per_layer = stats != NULL
-        ? stats->std_candidates_per_layer
-        : kEmptyDoubleVector;
-    const vector<double> &std_frontier_survivors_per_layer = stats != NULL
-        ? stats->std_frontier_survivors_per_layer
-        : kEmptyDoubleVector;
+    const vector<double> &std_candidates_per_layer =
+        stats != NULL ? stats->std_candidates_per_layer : kEmptyDoubleVector;
+    const vector<double> &std_frontier_survivors_per_layer =
+        stats != NULL ? stats->std_frontier_survivors_per_layer : kEmptyDoubleVector;
 
     out << "{";
     out << "\"schema_version\":1,";
@@ -302,11 +263,15 @@ bool write_stats_jsonl(const string &out_path,
     out << "},";
 
     out << "\"metrics\":{";
-    out << "\"wall_state_dominance_s\":" << (stats != NULL ? stats->wall_state_dominance_s : 0.0) << ",";
+    out << "\"wall_state_dominance_s\":" << (stats != NULL ? stats->wall_state_dominance_s : 0.0)
+        << ",";
     out << "\"wall_cutset_sort_s\":" << (stats != NULL ? stats->wall_cutset_sort_s : 0.0) << ",";
-    out << "\"wall_cutset_convolution_s\":" << (stats != NULL ? stats->wall_cutset_convolution_s : 0.0) << ",";
-    out << "\"wall_cutset_partial_merge_s\":" << (stats != NULL ? stats->wall_cutset_partial_merge_s : 0.0) << ",";
-    out << "\"wall_pack_transfer_s\":" << (stats != NULL ? stats->wall_pack_transfer_s : 0.0) << ",";
+    out << "\"wall_cutset_convolution_s\":"
+        << (stats != NULL ? stats->wall_cutset_convolution_s : 0.0) << ",";
+    out << "\"wall_cutset_partial_merge_s\":"
+        << (stats != NULL ? stats->wall_cutset_partial_merge_s : 0.0) << ",";
+    out << "\"wall_pack_transfer_s\":" << (stats != NULL ? stats->wall_pack_transfer_s : 0.0)
+        << ",";
     out << "\"wall_join_s\":" << (stats != NULL ? stats->wall_join_s : 0.0) << ",";
     out << "\"cpu_layers_td\":" << (stats != NULL ? stats->cpu_layers_td : 0) << ",";
     out << "\"cpu_layers_bu\":" << (stats != NULL ? stats->cpu_layers_bu : 0) << ",";
@@ -325,10 +290,8 @@ bool write_stats_jsonl(const string &out_path,
     out << "}";
     out << "}\n";
 
-    if (!out.good())
-    {
-        if (error != NULL)
-        {
+    if (!out.good()) {
+        if (error != NULL) {
             *error = "failed while writing JSONL output";
         }
         return false;
@@ -336,39 +299,48 @@ bool write_stats_jsonl(const string &out_path,
     return true;
 }
 
-void print_and_save_run_summary(const CliOptions &opts, 
-                                const EnumerationStats *enumeration_stats, 
-                                const DDStats &run_summary, 
-                                const ParetoFrontier *pareto_frontier)
-{
-    if (opts.problem_type == 3)
-    {
+void print_and_save_run_summary(const CliOptions &opts, const EnumerationStats *enumeration_stats,
+                                const DDStats &run_summary, const ParetoFrontier *pareto_frontier) {
+    if (opts.problem_type == 3) {
         const double cpu_total_s = enumeration_stats != NULL ? enumeration_stats->cpu_total_s : 0.0;
-        const double cpu_compile_s = enumeration_stats != NULL ? enumeration_stats->cpu_compile_s : 0.0;
-        const double cpu_enumeration_s = enumeration_stats != NULL ? enumeration_stats->cpu_enumeration_s : 0.0;
-        const double wall_compile_s = enumeration_stats != NULL ? enumeration_stats->wall_compile_s : 0.0;
-        const double wall_enumeration_s = enumeration_stats != NULL ? enumeration_stats->wall_enumeration_s : 0.0;
+        const double cpu_compile_s =
+            enumeration_stats != NULL ? enumeration_stats->cpu_compile_s : 0.0;
+        const double cpu_enumeration_s =
+            enumeration_stats != NULL ? enumeration_stats->cpu_enumeration_s : 0.0;
+        const double wall_compile_s =
+            enumeration_stats != NULL ? enumeration_stats->wall_compile_s : 0.0;
+        const double wall_enumeration_s =
+            enumeration_stats != NULL ? enumeration_stats->wall_enumeration_s : 0.0;
 
-        cout << (enumeration_stats != NULL ? enumeration_stats->num_solutions : pareto_frontier->get_num_sols()) << endl;
+        cout << (enumeration_stats != NULL ? enumeration_stats->num_solutions
+                                           : pareto_frontier->get_num_sols())
+             << endl;
         cout << cpu_total_s << endl;
         cout << cpu_compile_s;
         cout << "\t" << cpu_enumeration_s;
         cout << "\t" << wall_compile_s;
         cout << "\t" << wall_enumeration_s;
         cout << endl;
-    }
-    else
-    {
-        const int layer_coupling = enumeration_stats != NULL ? enumeration_stats->layer_coupling : 0;
-        const int dominance_filtered_total = enumeration_stats != NULL ? enumeration_stats->dominance_filtered_total : 0;
-        const double cpu_state_dominance_s = enumeration_stats != NULL ? enumeration_stats->cpu_state_dominance_s : 0.0;
-        const double cpu_compile_s = enumeration_stats != NULL ? enumeration_stats->cpu_compile_s : 0.0;
-        const double cpu_enumeration_s = enumeration_stats != NULL ? enumeration_stats->cpu_enumeration_s : 0.0;
+    } else {
+        const int layer_coupling =
+            enumeration_stats != NULL ? enumeration_stats->layer_coupling : 0;
+        const int dominance_filtered_total =
+            enumeration_stats != NULL ? enumeration_stats->dominance_filtered_total : 0;
+        const double cpu_state_dominance_s =
+            enumeration_stats != NULL ? enumeration_stats->cpu_state_dominance_s : 0.0;
+        const double cpu_compile_s =
+            enumeration_stats != NULL ? enumeration_stats->cpu_compile_s : 0.0;
+        const double cpu_enumeration_s =
+            enumeration_stats != NULL ? enumeration_stats->cpu_enumeration_s : 0.0;
         const double cpu_total_s = enumeration_stats != NULL ? enumeration_stats->cpu_total_s : 0.0;
-        const double wall_compile_s = enumeration_stats != NULL ? enumeration_stats->wall_compile_s : 0.0;
-        const double wall_enumeration_s = enumeration_stats != NULL ? enumeration_stats->wall_enumeration_s : 0.0;
+        const double wall_compile_s =
+            enumeration_stats != NULL ? enumeration_stats->wall_compile_s : 0.0;
+        const double wall_enumeration_s =
+            enumeration_stats != NULL ? enumeration_stats->wall_enumeration_s : 0.0;
 
-        cout << (enumeration_stats != NULL ? enumeration_stats->num_solutions : pareto_frontier->get_num_sols()) << endl;
+        cout << (enumeration_stats != NULL ? enumeration_stats->num_solutions
+                                           : pareto_frontier->get_num_sols())
+             << endl;
         cout << cpu_total_s << endl;
 
         cout << opts.method;
@@ -387,14 +359,12 @@ void print_and_save_run_summary(const CliOptions &opts,
         cout << endl;
     }
 
-    if (opts.save_stats)
-    {
+    if (opts.save_stats) {
         string stats_error;
-        if (!write_stats_jsonl(opts.stats_out_path, opts, enumeration_stats, run_summary, &stats_error))
-        {
+        if (!write_stats_jsonl(opts.stats_out_path, opts, enumeration_stats, run_summary,
+                               &stats_error)) {
             cerr << "Error - failed to save stats to '" << opts.stats_out_path << "'";
-            if (!stats_error.empty())
-            {
+            if (!stats_error.empty()) {
                 cerr << ": " << stats_error;
             }
             cerr << '\n';

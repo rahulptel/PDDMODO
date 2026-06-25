@@ -3,19 +3,18 @@
 // ----------------------------------------------------------
 
 #include <algorithm>
+#include <cstdlib>
 #include <fstream>
 #include <iostream>
-#include <cstdlib>
 
 #include "knapsack_instance.hpp"
 
 using namespace std;
 
-
 //
 // Read instance based on our format
 //
-void KnapsackInstance::read(char* filename) {
+void KnapsackInstance::read(char *filename) {
     ifstream input(filename);
     if (!input.is_open()) {
         cout << "Error - file " << filename << " could not be found" << endl;
@@ -26,7 +25,7 @@ void KnapsackInstance::read(char* filename) {
     input >> n_cons;
     input >> num_objs;
     // Allocate memory
-    obj_coeffs.resize( n_vars, vector<int>(num_objs, 0) );
+    obj_coeffs.resize(n_vars, vector<int>(num_objs, 0));
     coeffs.resize(n_cons, vector<int>(n_vars));
     rhs.resize(n_cons, 0);
     // Read objective coefficients
@@ -43,10 +42,9 @@ void KnapsackInstance::read(char* filename) {
         input >> rhs[c];
     }
 
-    // Print instance    
-    //print();
+    // Print instance
+    // print();
 }
-
 
 //
 // Print instance
@@ -63,7 +61,7 @@ void KnapsackInstance::print() {
     //     cout << "\t";
     //     for (int i = 0; i < n_vars; ++i) {
     //         cout << obj_coeffs[i][o] << " ";
-    //     }        
+    //     }
     //     cout << endl;
     // }
     // for (int c = 0; c < n_cons; ++c) {
@@ -76,26 +74,24 @@ void KnapsackInstance::print() {
     // }
 }
 
-
 //
 // Comparator based on largest constraint coefficients, in order of input
 //
 struct LargestCoeffComp {
     // Array of coefficients
-    const vector< vector<int> >& coeffs; 
+    const vector<vector<int>> &coeffs;
 
     // Constructor
-    LargestCoeffComp(const vector< vector<int> >& _coeffs) : coeffs(_coeffs) 
-    { }
+    LargestCoeffComp(const vector<vector<int>> &_coeffs) : coeffs(_coeffs) {}
 
     // Comparator
     bool operator()(const int i, const int j) const {
         int sumA = 0;
         int sumB = 0;
-        //for (int c = 0; c < coeffs.size(); ++c) {
-        for (int c = coeffs.size()-1; c >= 0; --c) {
+        // for (int c = 0; c < coeffs.size(); ++c) {
+        for (int c = coeffs.size() - 1; c >= 0; --c) {
             if (coeffs[c][i] != coeffs[c][j]) {
-               return coeffs[c][i] < coeffs[c][j]; 
+                return coeffs[c][i] < coeffs[c][j];
             }
             sumA += coeffs[c][i];
             sumB += coeffs[c][j];
@@ -107,7 +103,6 @@ struct LargestCoeffComp {
     }
 };
 
-
 //
 // Reorder variables based on constraint coefficients
 //
@@ -117,35 +112,30 @@ void KnapsackInstance::reorder_coefficients() {
     for (int i = 0; i < n_vars; ++i) {
         map[i] = i;
     }
-    
+
     // Sort
     LargestCoeffComp comp(coeffs);
     sort(map.begin(), map.end(), comp);
-    
+
     // Rearrange arrays
-    vector< vector<int> > new_coeffs = coeffs;
+    vector<vector<int>> new_coeffs = coeffs;
     for (int c = 0; c < n_cons; ++c) {
         for (int i = 0; i < n_vars; ++i) {
             new_coeffs[c][i] = coeffs[c][map[i]];
         }
     }
     coeffs = new_coeffs;
-    vector< vector<int> > new_obj_coeffs = obj_coeffs;
+    vector<vector<int>> new_obj_coeffs = obj_coeffs;
     for (int i = 0; i < n_vars; ++i) {
         for (int o = 0; o < NOBJS; ++o) {
             new_obj_coeffs[i][o] = obj_coeffs[map[i]][o];
         }
     }
     obj_coeffs = new_obj_coeffs;
-    
+
     // for (int i = 0; i < n_vars; ++i) {
     //     cout << map[i] << " ";
     // }
     // cout << endl;
-    //exit(1);
+    // exit(1);
 }
-
-
-
-
-

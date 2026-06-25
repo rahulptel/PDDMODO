@@ -71,40 +71,17 @@ struct EnumerationStats {
     int cpu_cutset_size;
 
     EnumerationStats()
-        : cpu_state_dominance_s(0.0),
-          dominance_filtered_total(0),
-          layer_coupling(0),
-          num_solutions(0),
-          cpu_compile_s(0.0),
-          cpu_enumeration_s(0.0),
-          cpu_total_s(0.0),
-          wall_compile_s(0.0),
-          wall_enumeration_s(0.0),
-          wall_state_dominance_s(0.0),
-          wall_cutset_sort_s(0.0),
-          wall_cutset_convolution_s(0.0),
-          wall_cutset_partial_merge_s(0.0),
-          wall_pack_transfer_s(0.0),
-          wall_join_s(0.0),
-          kernel_expand_td_s(0.0),
-          kernel_dominance_s(0.0),
-          kernel_total_s(0.0),
-          cpu_mem_peak_bytes(0),
-          gpu_mem_peak_used_bytes(0),
-          gpu_mem_peak_reserved_bytes(0),
-          work_candidates_total(0),
-          work_candidates_peak(0),
-          work_frontier_survivors_total(0),
-          work_frontier_peak_points(0),
-          work_join_products_total(0),
-          std_candidates_per_layer(),
-          std_frontier_survivors_per_layer(),
-          cpu_layers_td(0),
-          cpu_layers_bu(0),
-          cpu_nodes_expanded(0),
-          cpu_cutset_size(0)
-    {
-    }
+        : cpu_state_dominance_s(0.0), dominance_filtered_total(0), layer_coupling(0),
+          num_solutions(0), cpu_compile_s(0.0), cpu_enumeration_s(0.0), cpu_total_s(0.0),
+          wall_compile_s(0.0), wall_enumeration_s(0.0), wall_state_dominance_s(0.0),
+          wall_cutset_sort_s(0.0), wall_cutset_convolution_s(0.0), wall_cutset_partial_merge_s(0.0),
+          wall_pack_transfer_s(0.0), wall_join_s(0.0), kernel_expand_td_s(0.0),
+          kernel_dominance_s(0.0), kernel_total_s(0.0), cpu_mem_peak_bytes(0),
+          gpu_mem_peak_used_bytes(0), gpu_mem_peak_reserved_bytes(0), work_candidates_total(0),
+          work_candidates_peak(0), work_frontier_survivors_total(0), work_frontier_peak_points(0),
+          work_join_products_total(0), std_candidates_per_layer(),
+          std_frontier_survivors_per_layer(), cpu_layers_td(0), cpu_layers_bu(0),
+          cpu_nodes_expanded(0), cpu_cutset_size(0) {}
 };
 
 // Backward-compatible alias: existing code can keep using MultiObjectiveStats.
@@ -114,8 +91,7 @@ using MultiObjectiveStats = EnumerationStats;
 // Lightweight run-summary/output view model.
 // Keep only metadata and non-instrumentation fields.
 //
-struct DDStats
-{
+struct DDStats {
     long original_width;
     long reduced_width;
     long original_num_nodes;
@@ -127,17 +103,9 @@ struct DDStats
     std::string status_error_message;
 
     DDStats()
-        : original_width(-1),
-          reduced_width(-1),
-          original_num_nodes(-1),
-          reduced_num_nodes(-1),
-          max_num_nodes_per_layer(),
-          max_num_in_arcs(-1),
-          total_num_in_arcs(-1),
-          status_state("ok"),
-          status_error_message("")
-    {
-    }
+        : original_width(-1), reduced_width(-1), original_num_nodes(-1), reduced_num_nodes(-1),
+          max_num_nodes_per_layer(), max_num_in_arcs(-1), total_num_in_arcs(-1), status_state("ok"),
+          status_error_message("") {}
 };
 
 #endif /* STATS_HPP_ */

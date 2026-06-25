@@ -5,23 +5,23 @@
 #ifndef CPU_HELPERS_HPP_
 #define CPU_HELPERS_HPP_
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstring>
 #include <limits>
 #include <new>
 #include <stdexcept>
-#include <vector>
-#include <algorithm>
 #include <utility>
+#include <vector>
 
-#include "../pareto_frontier.hpp"
 #include "../../bdd/bdd.hpp"
 #include "../../mdd/mdd.hpp"
-#include "../../util/stats.hpp"
 #include "../../util/omp_compat.hpp"
+#include "../../util/stats.hpp"
+#include "../pareto_frontier.hpp"
 
-typedef std::pair<int,int> intpair;
+typedef std::pair<int, int> intpair;
 typedef std::chrono::steady_clock WallClock;
 
 struct CpuTopdownTileTask {
@@ -30,11 +30,12 @@ struct CpuTopdownTileTask {
     size_t local_end;
 };
 
-inline ParetoFrontier* request_frontier(ParetoFrontierManager* mgmr, const bool parallel_mode) {
+inline ParetoFrontier *request_frontier(ParetoFrontierManager *mgmr, const bool parallel_mode) {
     return parallel_mode ? new ParetoFrontier : mgmr->request();
 }
 
-inline void recycle_frontier(ParetoFrontierManager* mgmr, ParetoFrontier* frontier, const bool parallel_mode) {
+inline void recycle_frontier(ParetoFrontierManager *mgmr, ParetoFrontier *frontier,
+                             const bool parallel_mode) {
     if (frontier == NULL) {
         return;
     }
@@ -45,7 +46,7 @@ inline void recycle_frontier(ParetoFrontierManager* mgmr, ParetoFrontier* fronti
     }
 }
 
-inline ParetoFrontier* parallel_reduce_partial_frontiers(std::vector<ParetoFrontier*>& partial,
+inline ParetoFrontier *parallel_reduce_partial_frontiers(std::vector<ParetoFrontier *> &partial,
                                                          const bool parallel_mode,
                                                          const int threads) {
     size_t active_count = 0;
@@ -66,8 +67,8 @@ inline ParetoFrontier* parallel_reduce_partial_frontiers(std::vector<ParetoFront
         for (long long p = 0; p < pair_count_ll; ++p) {
             const size_t lhs_idx = static_cast<size_t>(p) * 2;
             const size_t rhs_idx = lhs_idx + 1;
-            ParetoFrontier* lhs = partial[lhs_idx];
-            ParetoFrontier* rhs = partial[rhs_idx];
+            ParetoFrontier *lhs = partial[lhs_idx];
+            ParetoFrontier *rhs = partial[rhs_idx];
             assert(lhs != NULL);
             assert(rhs != NULL);
             lhs->merge(*rhs);
@@ -87,32 +88,34 @@ inline ParetoFrontier* parallel_reduce_partial_frontiers(std::vector<ParetoFront
 }
 
 inline bool IntPairLargestToSmallestComp(intpair l, intpair r) {
-    return l.second > r.second;     // from largest to smallest
+    return l.second > r.second; // from largest to smallest
 }
 
-inline bool SetPackingStateMinElementSmallestToLargestComp(Node* l, Node* r) {
-    return l->setpack_state.find_first() < r->setpack_state.find_first();     // from smallest to largest
+inline bool SetPackingStateMinElementSmallestToLargestComp(Node *l, Node *r) {
+    return l->setpack_state.find_first() <
+           r->setpack_state.find_first(); // from smallest to largest
 }
 
 struct CompareNode {
-    bool operator()(const Node* nodeA, const Node* nodeB) const {
-        return (nodeA->pareto_frontier->get_sum() + nodeA->pareto_frontier_bu->get_sum()) > 
+    bool operator()(const Node *nodeA, const Node *nodeB) const {
+        return (nodeA->pareto_frontier->get_sum() + nodeA->pareto_frontier_bu->get_sum()) >
                (nodeB->pareto_frontier->get_sum() + nodeB->pareto_frontier_bu->get_sum());
     }
 };
 
 struct CompareMDDNode {
-    bool operator()(const MDDNode* nodeA, const MDDNode* nodeB) const {
-        return (nodeA->pareto_frontier->get_sum() + nodeA->pareto_frontier_bu->get_sum()) > 
+    bool operator()(const MDDNode *nodeA, const MDDNode *nodeB) const {
+        return (nodeA->pareto_frontier->get_sum() + nodeA->pareto_frontier_bu->get_sum()) >
                (nodeB->pareto_frontier->get_sum() + nodeB->pareto_frontier_bu->get_sum());
     }
 };
 
-inline double wall_elapsed_s(const WallClock::time_point& start) {
-    return std::chrono::duration_cast<std::chrono::duration<double> >(WallClock::now() - start).count();
+inline double wall_elapsed_s(const WallClock::time_point &start) {
+    return std::chrono::duration_cast<std::chrono::duration<double>>(WallClock::now() - start)
+        .count();
 }
 
-inline void reset_cpu_metrics_stats(EnumerationStats* stats) {
+inline void reset_cpu_metrics_stats(EnumerationStats *stats) {
     if (stats == NULL) {
         return;
     }
@@ -140,7 +143,7 @@ inline void reset_cpu_metrics_stats(EnumerationStats* stats) {
     stats->cpu_cutset_size = 0;
 }
 
-inline void update_peak_points(EnumerationStats* stats, const long long value) {
+inline void update_peak_points(EnumerationStats *stats, const long long value) {
     if (stats == NULL) {
         return;
     }
@@ -149,7 +152,7 @@ inline void update_peak_points(EnumerationStats* stats, const long long value) {
     }
 }
 
-inline void update_peak_candidates(EnumerationStats* stats, const long long value) {
+inline void update_peak_candidates(EnumerationStats *stats, const long long value) {
     if (stats == NULL) {
         return;
     }
@@ -158,8 +161,7 @@ inline void update_peak_candidates(EnumerationStats* stats, const long long valu
     }
 }
 
-inline double population_std_from_sums(const long double sum,
-                                       const long double sum_sq,
+inline double population_std_from_sums(const long double sum, const long double sum_sq,
                                        const long long count) {
     if (count <= 0) {
         return 0.0;
@@ -172,19 +174,19 @@ inline double population_std_from_sums(const long double sum,
     return std::sqrt(static_cast<double>(variance));
 }
 
-inline long long bdd_node_candidates_topdown(const Node* node, const bool maximization) {
+inline long long bdd_node_candidates_topdown(const Node *node, const bool maximization) {
     if (node == NULL) {
         return 0;
     }
     const int first_arc_type = maximization ? 1 : 0;
     const int second_arc_type = maximization ? 0 : 1;
     long long node_candidates = 0;
-    for (Node* prev : node->prev[first_arc_type]) {
+    for (Node *prev : node->prev[first_arc_type]) {
         if (prev != NULL && prev->pareto_frontier != NULL) {
             node_candidates += prev->pareto_frontier->get_num_sols();
         }
     }
-    for (Node* prev : node->prev[second_arc_type]) {
+    for (Node *prev : node->prev[second_arc_type]) {
         if (prev != NULL && prev->pareto_frontier != NULL) {
             node_candidates += prev->pareto_frontier->get_num_sols();
         }
@@ -192,35 +194,40 @@ inline long long bdd_node_candidates_topdown(const Node* node, const bool maximi
     return node_candidates;
 }
 
-inline long long bdd_node_candidates_bottomup(const Node* node, const bool maximization) {
+inline long long bdd_node_candidates_bottomup(const Node *node, const bool maximization) {
     if (node == NULL) {
         return 0;
     }
     const int first_arc_type = maximization ? 1 : 0;
     const int second_arc_type = maximization ? 0 : 1;
     long long node_candidates = 0;
-    if (node->arcs[first_arc_type] != NULL && node->arcs[first_arc_type]->pareto_frontier_bu != NULL) {
+    if (node->arcs[first_arc_type] != NULL &&
+        node->arcs[first_arc_type]->pareto_frontier_bu != NULL) {
         node_candidates += node->arcs[first_arc_type]->pareto_frontier_bu->get_num_sols();
     }
-    if (node->arcs[second_arc_type] != NULL && node->arcs[second_arc_type]->pareto_frontier_bu != NULL) {
+    if (node->arcs[second_arc_type] != NULL &&
+        node->arcs[second_arc_type]->pareto_frontier_bu != NULL) {
         node_candidates += node->arcs[second_arc_type]->pareto_frontier_bu->get_num_sols();
     }
     return node_candidates;
 }
 
-inline long long bdd_node_survivors_topdown(const Node* node) {
-    return (node != NULL && node->pareto_frontier != NULL) ? node->pareto_frontier->get_num_sols() : 0;
+inline long long bdd_node_survivors_topdown(const Node *node) {
+    return (node != NULL && node->pareto_frontier != NULL) ? node->pareto_frontier->get_num_sols()
+                                                           : 0;
 }
 
-inline long long bdd_node_survivors_bottomup(const Node* node) {
-    return (node != NULL && node->pareto_frontier_bu != NULL) ? node->pareto_frontier_bu->get_num_sols() : 0;
+inline long long bdd_node_survivors_bottomup(const Node *node) {
+    return (node != NULL && node->pareto_frontier_bu != NULL)
+               ? node->pareto_frontier_bu->get_num_sols()
+               : 0;
 }
 
-inline double std_bdd_candidates_topdown_layer(BDD* bdd, const int layer, const bool maximization) {
+inline double std_bdd_candidates_topdown_layer(BDD *bdd, const int layer, const bool maximization) {
     long double sum = 0.0L;
     long double sum_sq = 0.0L;
     const long long node_count = bdd->layers[layer].size();
-    for (Node* node : bdd->layers[layer]) {
+    for (Node *node : bdd->layers[layer]) {
         const long long node_candidates = bdd_node_candidates_topdown(node, maximization);
         const long double node_value = static_cast<long double>(node_candidates);
         sum += node_value;
@@ -229,11 +236,11 @@ inline double std_bdd_candidates_topdown_layer(BDD* bdd, const int layer, const 
     return population_std_from_sums(sum, sum_sq, node_count);
 }
 
-inline double std_bdd_survivors_topdown_layer(BDD* bdd, const int layer) {
+inline double std_bdd_survivors_topdown_layer(BDD *bdd, const int layer) {
     long double sum = 0.0L;
     long double sum_sq = 0.0L;
     const long long node_count = bdd->layers[layer].size();
-    for (Node* node : bdd->layers[layer]) {
+    for (Node *node : bdd->layers[layer]) {
         const long long node_survivors = bdd_node_survivors_topdown(node);
         const long double node_value = static_cast<long double>(node_survivors);
         sum += node_value;
@@ -242,11 +249,12 @@ inline double std_bdd_survivors_topdown_layer(BDD* bdd, const int layer) {
     return population_std_from_sums(sum, sum_sq, node_count);
 }
 
-inline double std_bdd_candidates_bottomup_layer(BDD* bdd, const int layer, const bool maximization) {
+inline double std_bdd_candidates_bottomup_layer(BDD *bdd, const int layer,
+                                                const bool maximization) {
     long double sum = 0.0L;
     long double sum_sq = 0.0L;
     const long long node_count = bdd->layers[layer].size();
-    for (Node* node : bdd->layers[layer]) {
+    for (Node *node : bdd->layers[layer]) {
         const long long node_candidates = bdd_node_candidates_bottomup(node, maximization);
         const long double node_value = static_cast<long double>(node_candidates);
         sum += node_value;
@@ -255,11 +263,11 @@ inline double std_bdd_candidates_bottomup_layer(BDD* bdd, const int layer, const
     return population_std_from_sums(sum, sum_sq, node_count);
 }
 
-inline double std_bdd_survivors_bottomup_layer(BDD* bdd, const int layer) {
+inline double std_bdd_survivors_bottomup_layer(BDD *bdd, const int layer) {
     long double sum = 0.0L;
     long double sum_sq = 0.0L;
     const long long node_count = bdd->layers[layer].size();
-    for (Node* node : bdd->layers[layer]) {
+    for (Node *node : bdd->layers[layer]) {
         const long long node_survivors = bdd_node_survivors_bottomup(node);
         const long double node_value = static_cast<long double>(node_survivors);
         sum += node_value;
@@ -268,13 +276,13 @@ inline double std_bdd_survivors_bottomup_layer(BDD* bdd, const int layer) {
     return population_std_from_sums(sum, sum_sq, node_count);
 }
 
-inline double std_mdd_candidates_topdown_layer(MDD* mdd, const int layer) {
+inline double std_mdd_candidates_topdown_layer(MDD *mdd, const int layer) {
     long double sum = 0.0L;
     long double sum_sq = 0.0L;
     const long long node_count = mdd->layers[layer].size();
-    for (MDDNode* node : mdd->layers[layer]) {
+    for (MDDNode *node : mdd->layers[layer]) {
         long long node_candidates = 0;
-        for (MDDArc* arc : node->in_arcs_list) {
+        for (MDDArc *arc : node->in_arcs_list) {
             if (arc != NULL && arc->tail != NULL && arc->tail->pareto_frontier != NULL) {
                 node_candidates += arc->tail->pareto_frontier->get_num_sols();
             }
@@ -286,14 +294,14 @@ inline double std_mdd_candidates_topdown_layer(MDD* mdd, const int layer) {
     return population_std_from_sums(sum, sum_sq, node_count);
 }
 
-inline double std_mdd_survivors_topdown_layer(MDD* mdd, const int layer) {
+inline double std_mdd_survivors_topdown_layer(MDD *mdd, const int layer) {
     long double sum = 0.0L;
     long double sum_sq = 0.0L;
     const long long node_count = mdd->layers[layer].size();
-    for (MDDNode* node : mdd->layers[layer]) {
+    for (MDDNode *node : mdd->layers[layer]) {
         const long long node_survivors = (node != NULL && node->pareto_frontier != NULL)
-            ? node->pareto_frontier->get_num_sols()
-            : 0;
+                                             ? node->pareto_frontier->get_num_sols()
+                                             : 0;
         const long double node_value = static_cast<long double>(node_survivors);
         sum += node_value;
         sum_sq += node_value * node_value;
@@ -301,42 +309,44 @@ inline double std_mdd_survivors_topdown_layer(MDD* mdd, const int layer) {
     return population_std_from_sums(sum, sum_sq, node_count);
 }
 
-inline long long count_bdd_candidates_topdown_layer(BDD* bdd, const int layer, const bool maximization) {
+inline long long count_bdd_candidates_topdown_layer(BDD *bdd, const int layer,
+                                                    const bool maximization) {
     long long total = 0;
-    for (Node* node : bdd->layers[layer]) {
+    for (Node *node : bdd->layers[layer]) {
         total += bdd_node_candidates_topdown(node, maximization);
     }
     return total;
 }
 
-inline long long count_bdd_survivors_topdown_layer(BDD* bdd, const int layer) {
+inline long long count_bdd_survivors_topdown_layer(BDD *bdd, const int layer) {
     long long total = 0;
-    for (Node* node : bdd->layers[layer]) {
+    for (Node *node : bdd->layers[layer]) {
         total += bdd_node_survivors_topdown(node);
     }
     return total;
 }
 
-inline long long count_bdd_candidates_bottomup_layer(BDD* bdd, const int layer, const bool maximization) {
+inline long long count_bdd_candidates_bottomup_layer(BDD *bdd, const int layer,
+                                                     const bool maximization) {
     long long total = 0;
-    for (Node* node : bdd->layers[layer]) {
+    for (Node *node : bdd->layers[layer]) {
         total += bdd_node_candidates_bottomup(node, maximization);
     }
     return total;
 }
 
-inline long long count_bdd_survivors_bottomup_layer(BDD* bdd, const int layer) {
+inline long long count_bdd_survivors_bottomup_layer(BDD *bdd, const int layer) {
     long long total = 0;
-    for (Node* node : bdd->layers[layer]) {
+    for (Node *node : bdd->layers[layer]) {
         total += bdd_node_survivors_bottomup(node);
     }
     return total;
 }
 
-inline long long count_mdd_candidates_topdown_layer(MDD* mdd, const int layer) {
+inline long long count_mdd_candidates_topdown_layer(MDD *mdd, const int layer) {
     long long total = 0;
-    for (MDDNode* node : mdd->layers[layer]) {
-        for (MDDArc* arc : node->in_arcs_list) {
+    for (MDDNode *node : mdd->layers[layer]) {
+        for (MDDArc *arc : node->in_arcs_list) {
             if (arc != NULL && arc->tail != NULL && arc->tail->pareto_frontier != NULL) {
                 total += arc->tail->pareto_frontier->get_num_sols();
             }
@@ -345,9 +355,9 @@ inline long long count_mdd_candidates_topdown_layer(MDD* mdd, const int layer) {
     return total;
 }
 
-inline long long count_mdd_survivors_topdown_layer(MDD* mdd, const int layer) {
+inline long long count_mdd_survivors_topdown_layer(MDD *mdd, const int layer) {
     long long total = 0;
-    for (MDDNode* node : mdd->layers[layer]) {
+    for (MDDNode *node : mdd->layers[layer]) {
         if (node != NULL && node->pareto_frontier != NULL) {
             total += node->pareto_frontier->get_num_sols();
         }
@@ -355,10 +365,10 @@ inline long long count_mdd_survivors_topdown_layer(MDD* mdd, const int layer) {
     return total;
 }
 
-inline long long count_mdd_candidates_bottomup_layer(MDD* mdd, const int layer) {
+inline long long count_mdd_candidates_bottomup_layer(MDD *mdd, const int layer) {
     long long total = 0;
-    for (MDDNode* node : mdd->layers[layer]) {
-        for (MDDArc* arc : node->out_arcs_list) {
+    for (MDDNode *node : mdd->layers[layer]) {
+        for (MDDArc *arc : node->out_arcs_list) {
             if (arc != NULL && arc->head != NULL && arc->head->pareto_frontier_bu != NULL) {
                 total += arc->head->pareto_frontier_bu->get_num_sols();
             }
@@ -367,9 +377,9 @@ inline long long count_mdd_candidates_bottomup_layer(MDD* mdd, const int layer) 
     return total;
 }
 
-inline long long count_mdd_survivors_bottomup_layer(MDD* mdd, const int layer) {
+inline long long count_mdd_survivors_bottomup_layer(MDD *mdd, const int layer) {
     long long total = 0;
-    for (MDDNode* node : mdd->layers[layer]) {
+    for (MDDNode *node : mdd->layers[layer]) {
         if (node != NULL && node->pareto_frontier_bu != NULL) {
             total += node->pareto_frontier_bu->get_num_sols();
         }
@@ -379,16 +389,22 @@ inline long long count_mdd_survivors_bottomup_layer(MDD* mdd, const int layer) {
 
 // Helper kernel declarations shared across CPU compilation units
 
-void expand_layer_topdown(BDD* bdd, const int l, const bool maximization, ParetoFrontierManager* mgmr, const int cpu_threads);
-void expand_layer_bottomup(BDD* bdd, const int l, const bool maximization, ParetoFrontierManager* mgmr, const int cpu_threads);
+void expand_layer_topdown(BDD *bdd, const int l, const bool maximization,
+                          ParetoFrontierManager *mgmr, const int cpu_threads);
+void expand_layer_bottomup(BDD *bdd, const int l, const bool maximization,
+                           ParetoFrontierManager *mgmr, const int cpu_threads);
 
-void expand_layer_topdown_cpu(BDD* bdd, const int layer, const bool maximization, ParetoFrontierManager* mgmr, const bool parallel_mode, const int threads);
-void expand_layer_topdown_mdd_cpu(MDD* mdd, const int l, ParetoFrontierManager* mgmr, const bool parallel_mode, const int threads);
-void expand_layer_bottomup_mdd_cpu(MDD* mdd, const int l, ParetoFrontierManager* mgmr, const bool parallel_mode, const int threads);
+void expand_layer_topdown_cpu(BDD *bdd, const int layer, const bool maximization,
+                              ParetoFrontierManager *mgmr, const bool parallel_mode,
+                              const int threads);
+void expand_layer_topdown_mdd_cpu(MDD *mdd, const int l, ParetoFrontierManager *mgmr,
+                                  const bool parallel_mode, const int threads);
+void expand_layer_bottomup_mdd_cpu(MDD *mdd, const int l, ParetoFrontierManager *mgmr,
+                                   const bool parallel_mode, const int threads);
 
-int topdown_layer_value(BDD* bdd, Node* node);
-int bottomup_layer_value(BDD* bdd, Node* node);
-int topdown_layer_value(MDD* mdd, MDDNode* node);
-int bottomup_layer_value(MDD* mdd, MDDNode* node);
+int topdown_layer_value(BDD *bdd, Node *node);
+int bottomup_layer_value(BDD *bdd, Node *node);
+int topdown_layer_value(MDD *mdd, MDDNode *node);
+int bottomup_layer_value(MDD *mdd, MDDNode *node);
 
 #endif // CPU_HELPERS_HPP_

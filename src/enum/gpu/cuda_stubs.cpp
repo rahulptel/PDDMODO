@@ -1,12 +1,14 @@
 // Stub implementations of CUDA wrappers used when compiling without USE_CUDA
 
-#include "cuda_wrappers.hpp"
-#include "../pareto_frontier.hpp"
-#include "../../mdd/mdd.hpp"
 #include "../../bdd/bdd.hpp"
+#include "../../mdd/mdd.hpp"
 #include "../multiobj_enum.hpp"
+#include "../pareto_frontier.hpp"
+#include "cuda_wrappers.hpp"
 
-ParetoFrontier* topdown_cuda_enumerate(BDD* bdd, bool maximization, const int problem_type, const int state_dominance, EnumerationStats* stats, std::string* reason, long long gpu_batch_size) {
+ParetoFrontier *topdown_cuda_enumerate(BDD *bdd, bool maximization, const int problem_type,
+                                       const int state_dominance, EnumerationStats *stats,
+                                       std::string *reason, long long gpu_batch_size) {
     (void)bdd;
     (void)maximization;
     (void)problem_type;
@@ -19,7 +21,8 @@ ParetoFrontier* topdown_cuda_enumerate(BDD* bdd, bool maximization, const int pr
     return NULL;
 }
 
-ParetoFrontier* topdown_mdd_cuda_enumerate(MDD* mdd, EnumerationStats* stats, std::string* reason, long long gpu_batch_size) {
+ParetoFrontier *topdown_mdd_cuda_enumerate(MDD *mdd, EnumerationStats *stats, std::string *reason,
+                                           long long gpu_batch_size) {
     (void)mdd;
     (void)stats;
     (void)gpu_batch_size;
@@ -29,7 +32,8 @@ ParetoFrontier* topdown_mdd_cuda_enumerate(MDD* mdd, EnumerationStats* stats, st
     return NULL;
 }
 
-ParetoFrontier* coupled_cuda_enumerate(MDD* mdd, EnumerationStats* stats, std::string* reason, long long gpu_batch_size, long long gpu_max_prod) {
+ParetoFrontier *coupled_cuda_enumerate(MDD *mdd, EnumerationStats *stats, std::string *reason,
+                                       long long gpu_batch_size, long long gpu_max_prod) {
     (void)mdd;
     (void)stats;
     (void)gpu_batch_size;
@@ -40,7 +44,10 @@ ParetoFrontier* coupled_cuda_enumerate(MDD* mdd, EnumerationStats* stats, std::s
     return NULL;
 }
 
-ParetoFrontier* coupled_bdd_cuda_enumerate(BDD* bdd, bool maximization, const int problem_type, const int state_dominance, EnumerationStats* stats, std::string* reason, long long gpu_batch_size, long long gpu_max_prod) {
+ParetoFrontier *coupled_bdd_cuda_enumerate(BDD *bdd, bool maximization, const int problem_type,
+                                           const int state_dominance, EnumerationStats *stats,
+                                           std::string *reason, long long gpu_batch_size,
+                                           long long gpu_max_prod) {
     (void)bdd;
     (void)maximization;
     (void)problem_type;

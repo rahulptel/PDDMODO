@@ -10,25 +10,22 @@
 
 using namespace std;
 
-
 //
 // TSP Instance
 //
 struct TSPInstance {
-	// Number of cities
-	int n_cities;   
-	// Number of objective functions
-	int n_objs;
-	// Objective functions  (indexed by objective/city/city)
-	vector< vector< vector<int> > > objs;
+    // Number of cities
+    int n_cities;
+    // Number of objective functions
+    int n_objs;
+    // Objective functions  (indexed by objective/city/city)
+    vector<vector<vector<int>>> objs;
 
-	// Empty Constructor
-	TSPInstance() { }
+    // Empty Constructor
+    TSPInstance() {}
 
-	// Read instance based on our model
-	void read(const char* filename);
+    // Read instance based on our model
+    void read(const char *filename);
 };
-
-
 
 #endif

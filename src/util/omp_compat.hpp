@@ -16,13 +16,13 @@
 #define CUMODD_OMP_PRAGMA(x) CUMODD_OMP_PRAGMA_IMPL(x)
 
 #if CUMODD_HAS_OPENMP
-#define CUMODD_OMP_PARALLEL_FOR_DYNAMIC_IF(parallel_mode, threads) \
+#define CUMODD_OMP_PARALLEL_FOR_DYNAMIC_IF(parallel_mode, threads)                                 \
     CUMODD_OMP_PRAGMA(omp parallel for if(parallel_mode) num_threads(threads) schedule(dynamic))
-#define CUMODD_OMP_PARALLEL_FOR_REDUCTION_SUM_IF(parallel_mode, threads, var) \
+#define CUMODD_OMP_PARALLEL_FOR_REDUCTION_SUM_IF(parallel_mode, threads, var)                      \
     CUMODD_OMP_PRAGMA(omp parallel for if(parallel_mode) num_threads(threads) reduction(+:var))
-#define CUMODD_OMP_PARALLEL_NUM_THREADS(threads) \
+#define CUMODD_OMP_PARALLEL_NUM_THREADS(threads)                                                   \
     CUMODD_OMP_PRAGMA(omp parallel num_threads(threads))
-#define CUMODD_OMP_FOR_DYNAMIC \
+#define CUMODD_OMP_FOR_DYNAMIC                                                                     \
     CUMODD_OMP_PRAGMA(omp for schedule(dynamic))
 #else
 #define CUMODD_OMP_PARALLEL_FOR_DYNAMIC_IF(parallel_mode, threads)
