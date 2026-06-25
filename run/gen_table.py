@@ -18,9 +18,21 @@ FARMS = {
     "gpu-td":      {"backend": "gpu", "workers": 1,  "forced_method": 1, "max_knapsack": None, "max_setpacking": None, "skip_setpacking_175": False},
 }
 
-KNAPSACK_MIN_VARS = 40
-SETPACKING_MIN_VARS = 150
-TSP_MIN_CITIES = 15
+KNAPSACK_CASES = {
+    (40, 6), (40, 7),
+    (50, 5), (50, 6), (50, 7),
+    (60, 4), (60, 5), (60, 6), (60, 7),
+    (70, 3), (70, 4), (70, 5), (70, 6), (70, 7),
+}
+
+SETPACKING_CASES = {
+    (150, 3), (150, 4), (150, 5), (150, 6), (150, 7),
+    (200, 3), (200, 4),
+}
+
+TSP_CASES = {
+    (15, 4), (15, 5), (15, 6), (15, 7),
+}
 
 def iter_dat_files(directory: Path):
     if not directory.is_dir():
@@ -93,7 +105,7 @@ def generate_table(farm_name, config, project_root):
         # Knapsack
         for path in iter_dat_files(source_data_root / "knapsack"):
             nvars = parse_knapsack_nvars(path.name)
-            if nvars is None or nvars < KNAPSACK_MIN_VARS:
+            if nvars is None or (nvars, nobjs) not in KNAPSACK_CASES:
                 continue
             if config["max_knapsack"] is not None and nvars > config["max_knapsack"]:
                 continue
@@ -103,7 +115,7 @@ def generate_table(farm_name, config, project_root):
         # Set packing (binproblem)
         for path in iter_dat_files(source_data_root / "binproblem"):
             nvars = parse_setpacking_nvars(path.name)
-            if nvars is None or nvars < SETPACKING_MIN_VARS:
+            if nvars is None or (nvars, nobjs) not in SETPACKING_CASES:
                 continue
             if config["max_setpacking"] is not None and nvars > config["max_setpacking"]:
                 continue
@@ -115,7 +127,7 @@ def generate_table(farm_name, config, project_root):
         # TSP
         for path in iter_dat_files(source_data_root / "tsp"):
             ncities = parse_tsp_cities(path.name)
-            if ncities is None or ncities < TSP_MIN_CITIES:
+            if ncities is None or (ncities, nobjs) not in TSP_CASES:
                 continue
             target_instance = target_data_base / str(nobjs) / "tsp" / path.name
             append_case(lines, config["backend"], config["workers"], binary, target_instance, 3, method_tsp, 0)
@@ -153,4 +165,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
