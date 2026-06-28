@@ -3,10 +3,14 @@
 Parallel Decision Diagram-based Multiobjective Discrete Optimization, or
 `PDDMODO`, is a C++ research codebase for exact multiobjective optimization
 with decision diagrams. It builds binary decision diagrams (BDDs) or multivalued
-decision diagrams (MDDs) for supported problem classes, then enumerates the
-Pareto frontier with CPU algorithms and selected CUDA implementations.
+decision diagrams (MDDs), then enumerates the Pareto frontier with CPU
+algorithms and selected CUDA implementations.
 
-The main executable is compiled for a fixed number of objectives:
+The active parallel decision-diagram implementation now lives under `src/pdd`.
+Baseline implementations used for comparison live under
+`src/benchmark/MODOBenchmark`.
+
+The main PDD executable is compiled for a fixed number of objectives:
 
 ```bash
 multiobj_nobjs<NUM_OBJS>
@@ -19,156 +23,102 @@ For example, a 3-objective build produces `multiobj_nobjs3`. Use a binary whose
 
 ```text
 .
-|-- makefile              # Main build file
-|-- compile_all.sh        # Helper script for building several NUM_OBJS binaries
+|-- data/                         # Benchmark/test instances grouped by objective count
 |-- src/
-|   |-- main.cpp          # CLI entry point, instance dispatch, build/enumeration flow
-|   |-- bdd/              # BDD data structures and constructors (knapsack, independent set)
-|   |-- mdd/              # MDD data structures and TSP MDD constructor
-|   |-- instances/        # Input parsers for knapsack, set packing, independent set, TSP
-|   |-- enum/             # Pareto frontier algorithms and enumeration dispatch
-|   |   |-- cpu/          # CPU top-down, bottom-up, and dynamic layer cutset algorithms
-|   |   |-- gpu/          # CUDA kernels/wrappers for GPU-based BFS and dynamic layer cutset
-|   |   |-- pareto_frontier.hpp  # Nondominated frontier container and merge/convolution logic
-|   |   `-- multiobj_enum.hpp/.cpp # Central dispatch hub for CPU/GPU frontier enumeration
-|   `-- util/             # CLI parsing, output, stats, OpenMP helpers, CPU affinity
-|-- data/                 # Benchmark/test instances grouped by objective count
-|-- cc/                   # Cluster/experiment job scripts and tables
-`-- kb/                   # Knowledge base: run notes, cleanup memory, autoresearch task files
+|   |-- pdd/                      # Active parallel decision-diagram implementation
+|   |   |-- makefile              # PDD build file
+|   |   |-- compile_all           # Helper script for NUM_OBJS=3..7 builds
+|   |   |-- main.cpp              # CLI entry point and problem dispatch
+|   |   |-- bdd/                  # BDD structures and constructors
+|   |   |-- mdd/                  # MDD structures and TSP constructor
+|   |   |-- instances/            # Knapsack, set packing, independent set, TSP parsers
+|   |   |-- enum/                 # Pareto frontier enumeration
+|   |   |   |-- cpu/              # CPU top-down, bottom-up, and coupled algorithms
+|   |   |   `-- gpu/              # CUDA kernels/wrappers and CPU-only stubs
+|   |   `-- util/                 # CLI parsing, output, stats, OpenMP helpers
+|   `-- benchmark/
+|       `-- MODOBenchmark/
+|           |-- dd/               # Decision-diagram/network-model baseline
+|           `-- dpa/              # Defining-point algorithm baseline
+|-- kb/                           # Repository-local notes and run context
+`-- results/                      # Generated/checked-in result plots
 ```
 
-The currently wired problem types are:
+The currently wired PDD problem types are:
 
 - `1`: multiobjective knapsack, represented as a BDD.
 - `2`: multiobjective set packing, converted to an independent-set BDD.
 - `3`: multiobjective TSP, represented as an MDD.
 
-The available enumeration methods are:
+The available PDD enumeration methods are:
 
 - `1`: top-down BFS frontier propagation.
 - `2`: bottom-up BFS frontier propagation.
 - `3`: dynamic layer cutset coupling.
 
-Pareto frontier enumeration code is located in `src/enum/`:
+## PDD Build
 
-- `src/enum/pareto_frontier.hpp`: Pareto frontier data structure, merge, and convolution logic.
-- `src/enum/multiobj_enum.hpp/.cpp`: central interface/dispatch for CPU and GPU enumeration methods.
+Builds are controlled by `src/pdd/makefile`. Run `make` from `src/pdd`, or use
+`make -C src/pdd` from the repository root.
 
-CPU enumeration methods (`src/enum/cpu/`):
-- `enum.cpp`: BDD/MDD top-down and bottom-up BFS frontier propagation.
-- `couple.cpp`: BDD/MDD dynamic layer cutset coupling.
-- `dominance.cpp`: BDD knapsack/set packing state dominance filtering.
-- `bottomup.cpp`: bottom-up enumeration helpers.
-- `topdown.cpp`: top-down enumeration helpers.
-- `cpu_helpers.hpp`: shared CPU functions for frontier operations.
-- `cpu_wrappers.hpp`: CPU method declarations.
-
-GPU/CUDA enumeration methods (`src/enum/gpu/`):
-- `enum.cu`: CUDA wrappers, device setup, and execution dispatch.
-- `topdown.cu`: BDD and MDD GPU top-down frontier propagation.
-- `bottomup.cu`: GPU bottom-up propagation kernels/helpers.
-- `couple.cu`: MDD dynamic layer cutset coupling kernels (cutset product join/merge).
-- `enum_types.cuh` and `dominance_utils.cuh`: CUDA-specific type definitions and device utility functions.
-- `cuda_stubs.cpp`: Stub implementations used during CPU-only builds (`ENABLE_CUDA=0`).
-- `cuda_wrappers.hpp`: GPU method declarations.
-
-The `kb/` directory is the repository-local knowledge base. It keeps durable
-implementation notes (`kb/MEMORY.md`, `kb/GPU_NOTES.md`) and autoresearch
-context (`kb/autoresearch/TASK.md`, `TSP_STATUS.md`, `ideas.md`,
-`results.tsv`). Some notes record older source paths from prior branches; when
-those notes disagree with the current tree, use the current `src/enum/gpu/`
-and `src/enum/cpu/` layout as authoritative.
-
-## Build
-
-Builds are controlled by the root `makefile`. The important options are:
+Important options:
 
 - `NUM_OBJS=<N>`: compile-time objective dimension. Default: `3`.
 - `ENABLE_CUDA=0|1`: include CUDA kernels. Default: `1`.
 - `ENABLE_OPENMP=0|1`: include OpenMP CPU parallelism. Default: `1`.
-- `machine=cc`: use `BOOST_ROOT` as the Boost location. This can come from
-  the environment as well as the make command line.
+- `machine=cc`: use `BOOST_ROOT` as the Boost location.
 - `NVCC=<path>`: override CUDA compiler auto-detection.
 
-The makefile uses `g++` for C++ sources and requires Boost headers under
-`/opt/boost/include` by default. CUDA builds require `nvcc >= 12`.
+The makefile uses `g++` for C++ sources and expects Boost headers under
+`/opt/boost/include` by default. CUDA builds require detected `nvcc >= 12`.
 
-If Boost is installed elsewhere, pass the Boost prefix explicitly:
+CPU-only build:
 
 ```bash
-make BOOSTDIR=/path/to/boost-prefix NUM_OBJS=3 ENABLE_CUDA=0 ENABLE_OPENMP=1
+make -C src/pdd clean
+make -C src/pdd NUM_OBJS=3 ENABLE_CUDA=0 ENABLE_OPENMP=1
 ```
 
-### CPU-Only Build
-
-Use this when CUDA is unavailable or when you only want CPU execution:
+CUDA build:
 
 ```bash
-make clean
-make NUM_OBJS=3 ENABLE_CUDA=0 ENABLE_OPENMP=1
+make -C src/pdd clean
+make -C src/pdd NUM_OBJS=3 ENABLE_CUDA=1 ENABLE_OPENMP=1
 ```
 
-For a serial CPU build without OpenMP:
+If Boost is installed elsewhere:
 
 ```bash
-make clean
-make NUM_OBJS=3 ENABLE_CUDA=0 ENABLE_OPENMP=0
+make -C src/pdd BOOSTDIR=/path/to/boost-prefix NUM_OBJS=3 ENABLE_CUDA=0 ENABLE_OPENMP=1
 ```
 
-When OpenMP is disabled, explicit CPU thread arguments are rejected at runtime
-and the binary runs with one CPU thread.
-
-### GPU Build
-
-Use this when `nvcc` and the CUDA runtime are available:
+The helper script builds `multiobj_nobjs3` through `multiobj_nobjs7` by default
+and stores the resulting binaries in `src/pdd/resources/bin`:
 
 ```bash
-make clean
-make NUM_OBJS=3 ENABLE_CUDA=1 ENABLE_OPENMP=1
-```
-
-If `nvcc` is not on the default path:
-
-```bash
-make clean
-make NUM_OBJS=3 ENABLE_CUDA=1 ENABLE_OPENMP=1 NVCC=/usr/local/cuda/bin/nvcc
-```
-
-### Build Multiple Objective Dimensions
-
-`compile_all.sh` builds `multiobj_nobjs3` through `multiobj_nobjs7` by default:
-
-```bash
-./compile_all.sh
+src/pdd/compile_all
 ```
 
 Useful overrides:
 
 ```bash
-ENABLE_CUDA=0 ENABLE_OPENMP=1 ./compile_all.sh
-NUM_OBJS_MIN=4 NUM_OBJS_MAX=6 ./compile_all.sh
-CLEAN_FIRST=0 MAKE_JOBS=-j8 ./compile_all.sh
+ENABLE_CUDA=0 ENABLE_OPENMP=1 src/pdd/compile_all
+NUM_OBJS_MIN=4 NUM_OBJS_MAX=6 src/pdd/compile_all
+CLEAN_FIRST=0 MAKE_JOBS=-j8 src/pdd/compile_all
 ```
 
 On Compute Canada-style environments using `machine=cc`, set `BOOST_ROOT`:
 
 ```bash
-BOOST_ROOT=/path/to/boost machine=cc ENABLE_CUDA=0 ./compile_all.sh
+BOOST_ROOT=/path/to/boost machine=cc ENABLE_CUDA=0 src/pdd/compile_all
 ```
 
-If your shell already has `machine=cc` set, regular `make` commands also need
-`BOOST_ROOT`:
-
-```bash
-BOOST_ROOT=/path/to/boost make NUM_OBJS=3 ENABLE_CUDA=0 ENABLE_OPENMP=1
-```
-
-## Run
+## PDD Run
 
 General CLI:
 
 ```bash
-./multiobj_nobjs3 <input-file> <problem-type> <method> <state_dominance> [options]
+src/pdd/multiobj_nobjs3 <input-file> <problem-type> <method> <state_dominance> [options]
 ```
 
 Arguments:
@@ -192,9 +142,6 @@ CPU options:
 --cpu-threads <N>
 ```
 
-If `--cpu-threads` is omitted in an OpenMP build, the program uses
-`OMP_NUM_THREADS` when it is a valid positive integer, otherwise `1`.
-
 GPU options:
 
 ```bash
@@ -202,15 +149,9 @@ GPU options:
 --max-prod <N>
 ```
 
-`--max-cand` overrides the CUDA candidate batch cap. It accepts plain positive
-integers or `K`, `M`, `B` decimal suffixes, such as `500K`, `20M`, or `2B`.
-The default is `20M`.
-
-`--max-prod` overrides the CUDA coupled batch product cap. It accepts plain positive
-integers or `K`, `M`, `B` decimal suffixes, such as `100K`, `625K`, or `5M`.
-The default is `625K`.
-
-The token `cuda` is intentionally rejected; use `gpu`.
+`--max-cand` defaults to `20M`; `--max-prod` defaults to `625K`. Both accept
+plain positive integers or `K`, `M`, `B` decimal suffixes. The token `cuda` is
+intentionally rejected; use `gpu`.
 
 Output options:
 
@@ -241,64 +182,106 @@ For TSP MDDs:
 - GPU supports methods `1` and `3`.
 - Method `2` is not accepted for TSP.
 
-## Test on a Small Instance
+## Small PDD Tests
 
-The commands below use a 3-objective knapsack instance included in `data/`.
-
-### CPU Top-Down Test
+The commands below use 3-objective instances included in `data/`.
 
 ```bash
-make clean
-make NUM_OBJS=3 ENABLE_CUDA=0 ENABLE_OPENMP=1
+make -C src/pdd clean
+make -C src/pdd NUM_OBJS=3 ENABLE_CUDA=0 ENABLE_OPENMP=1
+```
 
-./multiobj_nobjs3 data/3/knapsack/KP_p-3_n-10_ins-1.dat 1 1 0 \
+CPU top-down knapsack:
+
+```bash
+src/pdd/multiobj_nobjs3 data/3/knapsack/KP_p-3_n-10_ins-1.dat 1 1 0 \
   --backend cpu --cpu-threads 4 \
   --save-stats --stats-out test.cpu.stats.jsonl
 ```
 
-### CPU Dynamic Layer Cutset Test
+CPU dynamic layer cutset knapsack:
 
 ```bash
-./multiobj_nobjs3 data/3/knapsack/KP_p-3_n-10_ins-1.dat 1 3 0 \
+src/pdd/multiobj_nobjs3 data/3/knapsack/KP_p-3_n-10_ins-1.dat 1 3 0 \
   --backend cpu --cpu-threads 4 \
   --save-frontier --frontier-out test.cpu.frontier.csv.gz
 ```
 
-### GPU Top-Down Test
+TSP MDD:
 
 ```bash
-make clean
-make NUM_OBJS=3 ENABLE_CUDA=1 ENABLE_OPENMP=1
-
-./multiobj_nobjs3 data/3/knapsack/KP_p-3_n-10_ins-1.dat 1 1 0 \
-  --backend gpu \
-  --max-cand 20M \
-  --save-stats --stats-out test.gpu.stats.jsonl
-```
-
-### GPU Coupled Test
-
-```bash
-./multiobj_nobjs3 data/3/knapsack/KP_p-3_n-10_ins-1.dat 1 3 0 \
-  --backend gpu \
-  --max-cand 20M \
-  --max-prod 625K \
-  --save-stats --stats-out test.gpu.stats.jsonl
-```
-
-### TSP MDD Test
-
-```bash
-./multiobj_nobjs3 data/3/tsp/tsp-nobj3-ncities5-seed495.dat 3 1 0 \
+src/pdd/multiobj_nobjs3 data/3/tsp/tsp-nobj3-ncities5-seed495.dat 3 1 0 \
   --backend cpu --cpu-threads 4
 ```
 
-Successful runs always print three lines:
+Successful PDD runs always print three lines:
 
 1. Number of Pareto solutions.
 2. CPU total time, equal to compile time plus enumeration time.
 3. Tab-separated run statistics. BDD problem types include BDD structure fields;
    TSP prints compile/enumeration timing fields.
 
-When comparing CPU and GPU runs, the first line should match for the same
-instance, problem type, method semantics, and objective count.
+## PDD Code Map
+
+- `src/pdd/main.cpp`: CLI dispatch, instance loading, BDD/MDD construction,
+  method/backend selection, output calls.
+- `src/pdd/util/`: CLI parsing, gzip frontier output, JSONL stats, OpenMP
+  compatibility, CPU affinity, common helpers.
+- `src/pdd/bdd/`: BDD node/arc structure, reduction logic, knapsack and
+  independent-set BDD constructors.
+- `src/pdd/mdd/`: MDD node/arc structure and exact TSP MDD constructor.
+- `src/pdd/enum/`: central multiobjective frontier enumeration dispatch and
+  Pareto frontier container.
+- `src/pdd/enum/cpu/`: CPU top-down, bottom-up, coupled, and state-dominance
+  implementations.
+- `src/pdd/enum/gpu/`: CUDA top-down/coupled implementations, dominance helpers,
+  device-side types, wrappers, and CPU-only stubs.
+- `src/pdd/instances/`: parsers for knapsack, set packing, independent set, and
+  TSP. `assignment_instance.*` is stubbed and not integrated in `main`.
+
+## Baselines
+
+The benchmark baselines are under `src/benchmark/MODOBenchmark`.
+
+- `dd/`: the older decision-diagram/network-model baseline. It builds an
+  executable named `multiobj` with `NUM_OBJS` compiled in. This code depends on
+  CPLEX, Concert, CP Optimizer, and Boost.
+- `dpa/`: the defining-point algorithm baseline. It builds an executable named
+  `main` and reads CPLEX `.lp` instances. This code depends on CPLEX and
+  Concert.
+
+Baseline build examples:
+
+```bash
+make -C src/benchmark/MODOBenchmark/dd NUM_OBJS=3
+make -C src/benchmark/MODOBenchmark/dpa
+```
+
+See `src/benchmark/MODOBenchmark/README.md` for baseline-specific CLI details.
+
+## Input Format Cheat Sheet
+
+- Knapsack (`src/pdd/instances/knapsack_instance.cpp`):
+  - `n_vars n_cons num_objs`
+  - `num_objs` rows of `n_vars` objective coefficients
+  - For each constraint: `n_vars` coefficients followed by one RHS.
+- Set packing (`src/pdd/instances/setpacking_instance.hpp`):
+  - `n_vars n_cons n_objs`
+  - Objective matrix of shape `n_objs x n_vars`
+  - For each constraint: `count` followed by `count` 1-based variable ids.
+  - The parser converts constraint variable ids to 0-based indices.
+- TSP (`src/pdd/instances/tsp_instance.cpp`):
+  - `n_objs n_cities`
+  - For each objective: full `n_cities x n_cities` cost matrix.
+
+## Notes
+
+- `NOBJS` consistency matters. Rebuild when changing objective dimension.
+- There is no dedicated unit-test suite in this repo.
+- `data/` contains sample benchmark files, so prefer small checked-in instances
+  for smoke tests.
+- `write_frontier_gzip_csv` shells out to `gzip`; frontier saving requires
+  `gzip` on `PATH`.
+- The `kb/` directory is a repository-local knowledge base. Some notes may
+  mention older source paths such as `src/enum/*`; in this checkout, use the
+  current `src/pdd/enum/*` paths as authoritative.

@@ -83,23 +83,21 @@ endif
 
 
 # ---- COMPILE  ----
-SRC_DIR   := src
+SRC_DIRS  := . $(shell find bdd enum instances mdd util -type d)
 OBJ_DIR   := obj/nobjs$(NUM_OBJS)
+OBJ_DIRS  := $(OBJ_DIR) $(addprefix $(OBJ_DIR)/,$(filter-out .,$(SRC_DIRS)))
 
-SRC_DIRS  := $(shell find $(SRC_DIR) -type d)
-OBJ_DIRS  := $(addprefix $(OBJ_DIR)/,$(SRC_DIRS))
-
-SOURCES_CPP := $(shell find $(SRC_DIR) -name '*.cpp')
-SOURCES_CPP := $(filter-out src/enum/gpu/cuda_stubs.cpp, $(SOURCES_CPP))
+SOURCES_CPP := main.cpp $(shell find bdd enum instances mdd util -name '*.cpp')
+SOURCES_CPP := $(filter-out enum/gpu/cuda_stubs.cpp, $(SOURCES_CPP))
 
 OBJ_FILES   := $(addprefix $(OBJ_DIR)/, $(SOURCES_CPP:.cpp=.o))
 ifeq ($(ENABLE_CUDA),1)
-CUDA_SOURCES  := $(shell find $(SRC_DIR) -name '*.cu')
+CUDA_SOURCES  := $(shell find bdd enum instances mdd util -name '*.cu')
 CUDA_OBJ_FILES := $(addprefix $(OBJ_DIR)/, $(CUDA_SOURCES:.cu=.o))
 OBJ_FILES     += $(CUDA_OBJ_FILES)
 vpath %.cu $(SRC_DIRS)
 else
-STUB_SOURCES := src/enum/gpu/cuda_stubs.cpp
+STUB_SOURCES := enum/gpu/cuda_stubs.cpp
 OBJ_FILES   += $(addprefix $(OBJ_DIR)/, $(STUB_SOURCES:.cpp=.o))
 endif
 
