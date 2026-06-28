@@ -40,6 +40,7 @@ For example, a 3-objective build produces `multiobj_nobjs3`. Use a binary whose
 |       `-- MODOBenchmark/
 |           |-- dd/               # Decision-diagram/network-model baseline
 |           `-- dpa/              # Defining-point algorithm baseline
+|-- resources/bin/pdd/            # PDD binaries produced by make/compile_all
 |-- kb/                           # Repository-local notes and run context
 `-- results/                      # Generated/checked-in result plots
 ```
@@ -92,8 +93,8 @@ If Boost is installed elsewhere:
 make -C src/pdd BOOSTDIR=/path/to/boost-prefix NUM_OBJS=3 ENABLE_CUDA=0 ENABLE_OPENMP=1
 ```
 
-The helper script builds `multiobj_nobjs3` through `multiobj_nobjs7` by default
-and stores the resulting binaries in `src/pdd/resources/bin`:
+The makefile and helper script write binaries to `resources/bin/pdd`. The helper
+script builds `multiobj_nobjs3` through `multiobj_nobjs7` by default:
 
 ```bash
 src/pdd/compile_all
@@ -118,7 +119,7 @@ BOOST_ROOT=/path/to/boost machine=cc ENABLE_CUDA=0 src/pdd/compile_all
 General CLI:
 
 ```bash
-src/pdd/multiobj_nobjs3 <input-file> <problem-type> <method> <state_dominance> [options]
+resources/bin/pdd/multiobj_nobjs3 <input-file> <problem-type> <method> <state_dominance> [options]
 ```
 
 Arguments:
@@ -194,7 +195,7 @@ make -C src/pdd NUM_OBJS=3 ENABLE_CUDA=0 ENABLE_OPENMP=1
 CPU top-down knapsack:
 
 ```bash
-src/pdd/multiobj_nobjs3 data/3/knapsack/KP_p-3_n-10_ins-1.dat 1 1 0 \
+resources/bin/pdd/multiobj_nobjs3 data/3/knapsack/KP_p-3_n-10_ins-1.dat 1 1 0 \
   --backend cpu --cpu-threads 4 \
   --save-stats --stats-out test.cpu.stats.jsonl
 ```
@@ -202,7 +203,7 @@ src/pdd/multiobj_nobjs3 data/3/knapsack/KP_p-3_n-10_ins-1.dat 1 1 0 \
 CPU dynamic layer cutset knapsack:
 
 ```bash
-src/pdd/multiobj_nobjs3 data/3/knapsack/KP_p-3_n-10_ins-1.dat 1 3 0 \
+resources/bin/pdd/multiobj_nobjs3 data/3/knapsack/KP_p-3_n-10_ins-1.dat 1 3 0 \
   --backend cpu --cpu-threads 4 \
   --save-frontier --frontier-out test.cpu.frontier.csv.gz
 ```
@@ -210,7 +211,7 @@ src/pdd/multiobj_nobjs3 data/3/knapsack/KP_p-3_n-10_ins-1.dat 1 3 0 \
 TSP MDD:
 
 ```bash
-src/pdd/multiobj_nobjs3 data/3/tsp/tsp-nobj3-ncities5-seed495.dat 3 1 0 \
+resources/bin/pdd/multiobj_nobjs3 data/3/tsp/tsp-nobj3-ncities5-seed495.dat 3 1 0 \
   --backend cpu --cpu-threads 4
 ```
 

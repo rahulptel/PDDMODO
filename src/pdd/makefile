@@ -68,7 +68,9 @@ CUDAFLAGS = -std=c++14 -O3 -DUSE_CUDA -DNOBJS=$(NUM_OBJS) -I$(BOOSTDIR)/include
 LDFLAGS += -lcudart
 endif
 
-EXECUTABLE = multiobj_nobjs$(NUM_OBJS)
+BIN_DIR = ../../resources/bin/pdd
+EXECUTABLE_NAME = multiobj_nobjs$(NUM_OBJS)
+EXECUTABLE = $(BIN_DIR)/$(EXECUTABLE_NAME)
 
 ifneq ($(filter clean,$(MAKECMDGOALS)),clean)
 ifeq ($(ENABLE_CUDA),1)
@@ -119,11 +121,14 @@ $(OBJ_DIR)/%.o: %.cpp
 $(OBJ_DIR)/%.o: %.cu
 	$(NVCC) $(CUDAFLAGS) -c $< -o $@
 
-makedir: $(OBJ_DIRS)
+makedir: $(OBJ_DIRS) $(BIN_DIR)
 
 $(OBJ_DIRS):
 	@mkdir -p $@
 
+$(BIN_DIR):
+	@mkdir -p $@
+
 clean:
 	@rm -rf obj
-	@rm -f multiobj_nobjs* multiobj
+	@rm -f $(BIN_DIR)/multiobj_nobjs* $(BIN_DIR)/multiobj

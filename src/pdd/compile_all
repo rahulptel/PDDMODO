@@ -61,7 +61,8 @@ if [ "$MACHINE" = "cc" ] && [ -z "${BOOST_ROOT:-}" ]; then
 fi
 
 PROJECT_ROOT="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-BIN_DIR="$PROJECT_ROOT/resources/bin"
+REPO_ROOT="$(CDPATH= cd -- "$PROJECT_ROOT/../.." && pwd)"
+BIN_DIR="$REPO_ROOT/resources/bin/pdd"
 
 cd "$PROJECT_ROOT"
 mkdir -p "$BIN_DIR"
@@ -73,12 +74,11 @@ fi
 
 for i in $(seq "$NUM_OBJS_MIN" "$NUM_OBJS_MAX"); do
     make "${MACHINE_ARGS[@]}" "${NVCC_ARGS[@]}" "${BUILD_ARGS[@]}" "$MAKE_JOBS" NUM_OBJS="$i"
-    BUILT_BIN="$PROJECT_ROOT/multiobj_nobjs$i"
+    BUILT_BIN="$BIN_DIR/multiobj_nobjs$i"
     if [ ! -f "$BUILT_BIN" ]; then
         echo "Error: expected binary not found after build: $BUILT_BIN"
         exit 1
     fi
-    mv -f "$BUILT_BIN" "$BIN_DIR/"
 done
 
 echo "Successfully built multiobj binaries and stored in $BIN_DIR"

@@ -47,7 +47,7 @@ Common PDD commands from the repo root:
 - Builds `NUM_OBJS=3..7`.
 - Uses `ENABLE_CUDA=1` and `ENABLE_OPENMP=1` unless overridden.
 - Runs `make clean` first unless `CLEAN_FIRST=0`.
-- Stores binaries in `src/pdd/resources/bin/`.
+- Stores binaries in `resources/bin/pdd/`.
 
 Baseline commands:
 - `make -C src/benchmark/MODOBenchmark/dd NUM_OBJS=3`
@@ -58,7 +58,7 @@ Baseline commands:
 Usage from the repo root:
 
 ```bash
-src/pdd/multiobj_nobjs3 <input-file> <problem-type> <method> <state_dominance> [options]
+resources/bin/pdd/multiobj_nobjs3 <input-file> <problem-type> <method> <state_dominance> [options]
 ```
 
 Problem types:
@@ -111,13 +111,13 @@ make -C src/pdd NUM_OBJS=3 ENABLE_CUDA=0 ENABLE_OPENMP=1
 Run top-down enumeration on CPU with threads (`method=1`):
 
 ```bash
-src/pdd/multiobj_nobjs3 data/3/knapsack/KP_p-3_n-10_ins-1.dat 1 1 0 --backend cpu --cpu-threads 8
+resources/bin/pdd/multiobj_nobjs3 data/3/knapsack/KP_p-3_n-10_ins-1.dat 1 1 0 --backend cpu --cpu-threads 8
 ```
 
 Run coupled enumeration on CPU with threads (`method=3`, dynamic layer cutset):
 
 ```bash
-src/pdd/multiobj_nobjs3 data/3/knapsack/KP_p-3_n-10_ins-1.dat 1 3 0 --backend cpu --cpu-threads 8
+resources/bin/pdd/multiobj_nobjs3 data/3/knapsack/KP_p-3_n-10_ins-1.dat 1 3 0 --backend cpu --cpu-threads 8
 ```
 
 Build a CUDA-enabled binary:
@@ -130,7 +130,7 @@ make -C src/pdd NUM_OBJS=3 ENABLE_CUDA=1 ENABLE_OPENMP=1
 Run GPU-based top-down enumeration (`method=1`):
 
 ```bash
-src/pdd/multiobj_nobjs3 data/3/knapsack/KP_p-3_n-10_ins-1.dat 1 1 0 --backend gpu
+resources/bin/pdd/multiobj_nobjs3 data/3/knapsack/KP_p-3_n-10_ins-1.dat 1 1 0 --backend gpu
 ```
 
 For set packing, keep the same method/backend pattern and change
