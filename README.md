@@ -7,8 +7,7 @@ decision diagrams (MDDs), then enumerates the Pareto frontier with CPU
 algorithms and selected CUDA implementations.
 
 The active parallel decision-diagram implementation now lives under `src/pdd`.
-Baseline implementations used for comparison live under
-`src/benchmark/MODOBenchmark`.
+Baseline implementations used for comparison live under `src/baseline`.
 
 The main PDD executable is compiled for a fixed number of objectives:
 
@@ -36,11 +35,12 @@ For example, a 3-objective build produces `multiobj_nobjs3`. Use a binary whose
 |   |   |   |-- cpu/              # CPU top-down, bottom-up, and coupled algorithms
 |   |   |   `-- gpu/              # CUDA kernels/wrappers and CPU-only stubs
 |   |   `-- util/                 # CLI parsing, output, stats, OpenMP helpers
-|   `-- benchmark/
-|       `-- MODOBenchmark/
-|           |-- dd/               # Decision-diagram/network-model baseline
-|           `-- dpa/              # Defining-point algorithm baseline
+|   `-- baseline/
+|       |-- dd/                   # Decision-diagram/network-model baseline
+|       `-- dpa/                  # Defining-point algorithm baseline
 |-- resources/bin/pdd/            # PDD binaries produced by make/compile_all
+|-- resources/bin/baseline/dd/    # DD baseline binaries produced by make/compile_all.sh
+|-- resources/bin/baseline/dpa/   # DPA baseline binary produced by make
 |-- kb/                           # Repository-local notes and run context
 `-- results/                      # Generated/checked-in result plots
 ```
@@ -242,23 +242,24 @@ Successful PDD runs always print three lines:
 
 ## Baselines
 
-The benchmark baselines are under `src/benchmark/MODOBenchmark`.
+The benchmark baselines are under `src/baseline`.
 
 - `dd/`: the older decision-diagram/network-model baseline. It builds an
   executable named `multiobj` with `NUM_OBJS` compiled in. This code depends on
-  CPLEX, Concert, CP Optimizer, and Boost.
+  CPLEX, Concert, CP Optimizer, and Boost. Its makefile and `compile_all.sh`
+  write binaries to `resources/bin/baseline/dd`.
 - `dpa/`: the defining-point algorithm baseline. It builds an executable named
-  `main` and reads CPLEX `.lp` instances. This code depends on CPLEX and
-  Concert.
+  `main`, writes it to `resources/bin/baseline/dpa`, and reads CPLEX `.lp`
+  instances. This code depends on CPLEX and Concert.
 
 Baseline build examples:
 
 ```bash
-make -C src/benchmark/MODOBenchmark/dd NUM_OBJS=3
-make -C src/benchmark/MODOBenchmark/dpa
+make -C src/baseline/dd NUM_OBJS=3
+make -C src/baseline/dpa
 ```
 
-See `src/benchmark/MODOBenchmark/README.md` for baseline-specific CLI details.
+See the baseline source directories for baseline-specific CLI details.
 
 ## Input Format Cheat Sheet
 

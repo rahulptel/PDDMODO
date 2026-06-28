@@ -42,6 +42,8 @@ EXDIR         = $(ROOTDIR)/src
 EXINC         = $(EXDIR)
 EXOBJ	       = ./obj
 EXSRC         = $(EXDIR)
+BIN_DIR       = ../../../resources/bin/baseline/dpa
+EXECUTABLE    = $(BIN_DIR)/main
 
 # ---------------------------------------------------------------------
 # Flags
@@ -58,13 +60,23 @@ $(info $$CPLEXDIR is [${CPLEXDIR}])
 $(info $$CPLEXINCDIR is [${CPLEXINCDIR}])
 $(info $$CPLEXLIBDIR is [${CPLEXLIBDIR}])
 
-main: $(EXSRC)/main.cpp $(EXOBJ)/DefiningPoint.o
-	${CCC} ${CCFLAGS} $(EXSRC)/main.cpp $(EXOBJ)/DefiningPoint.o ${CCLNFLAGS} -o main 
+all: $(EXECUTABLE)
+
+main: $(EXECUTABLE)
+
+$(EXECUTABLE): $(EXSRC)/main.cpp $(EXOBJ)/DefiningPoint.o | $(BIN_DIR)
+	${CCC} ${CCFLAGS} $(EXSRC)/main.cpp $(EXOBJ)/DefiningPoint.o ${CCLNFLAGS} -o $(EXECUTABLE)
 
 $(EXOBJ)/DefiningPoint.o: $(EXSRC)/DefiningPoint.cpp $(EXINC)/DefiningPoint.h $(EXINC)/Box.h $(EXINC)/Efficient.h
 	mkdir -p $(EXOBJ)
 	$(CCC) -c $(CCFLAGS) $(EXSRC)/DefiningPoint.cpp -o $(EXOBJ)/DefiningPoint.o
 
+$(BIN_DIR):
+	mkdir -p $(BIN_DIR)
+
+clean:
+	rm -rf $(EXOBJ)
+	rm -f $(EXECUTABLE)
 
 
 

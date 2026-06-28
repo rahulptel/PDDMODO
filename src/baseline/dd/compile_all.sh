@@ -3,6 +3,8 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
+repo_root="$(CDPATH= cd -- "../../.." && pwd)"
+bin_dir="$repo_root/resources/bin/baseline/dd"
 first_num_objs=3
 last_num_objs=7
 make_cmd="${MAKE:-make}"
@@ -44,8 +46,9 @@ for ((num_objs = first_num_objs; num_objs <= last_num_objs; num_objs++)); do
     output="multiobj${num_objs}"
 
     echo "Building ${output} with NUM_OBJS=${num_objs}"
-    rm -f "$output"
+    mkdir -p "$bin_dir"
+    rm -f "$bin_dir/$output"
     "$make_cmd" "${make_args[@]}" clean
     "$make_cmd" -j "$jobs" NUM_OBJS="$num_objs" "${make_args[@]}"
-    cp multiobj "$output"
+    cp "$bin_dir/multiobj" "$bin_dir/$output"
 done

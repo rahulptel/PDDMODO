@@ -11,7 +11,7 @@
 ## 1) Repository Purpose
 - This is a C++ decision-diagram codebase for multiobjective optimization.
 - The active parallel decision-diagram implementation lives in `src/pdd/`.
-- Benchmark baselines live in `src/benchmark/MODOBenchmark/`:
+- Benchmark baselines live in `src/baseline/`:
   - `dd/`: older decision-diagram/network-model baseline.
   - `dpa/`: defining-point algorithm baseline.
 - Main PDD executable pattern: `multiobj_nobjs<NUM_OBJS>`, for example `multiobj_nobjs3`.
@@ -50,8 +50,8 @@ Common PDD commands from the repo root:
 - Stores binaries in `resources/bin/pdd/`.
 
 Baseline commands:
-- `make -C src/benchmark/MODOBenchmark/dd NUM_OBJS=3`
-- `make -C src/benchmark/MODOBenchmark/dpa`
+- `make -C src/baseline/dd NUM_OBJS=3`
+- `make -C src/baseline/dpa`
 - Baseline builds require their own solver dependencies; do not assume CPLEX is installed.
 
 ## 3) Runtime Interface
@@ -199,10 +199,10 @@ JSONL stats are written by `src/pdd/util/output_utils.cpp` and include identity,
 - `src/pdd/instances/`
   - Parsers for knapsack, set packing, independent set, and TSP.
   - `assignment_instance.*` is stubbed and not integrated in `main`.
-- `src/benchmark/MODOBenchmark/dd/`
-  - Decision-diagram/network-model baseline. It builds `multiobj` and has separate legacy problem support and dependencies.
-- `src/benchmark/MODOBenchmark/dpa/`
-  - Defining-point algorithm baseline. It builds `main` and reads CPLEX `.lp` files.
+- `src/baseline/dd/`
+  - Decision-diagram/network-model baseline. It builds `multiobj`, writes binaries to `resources/bin/baseline/dd`, and has separate legacy problem support and dependencies.
+- `src/baseline/dpa/`
+  - Defining-point algorithm baseline. It builds `main`, writes it to `resources/bin/baseline/dpa`, and reads CPLEX `.lp` files.
 - `data/`
   - Included benchmark/input data for objective dimensions `3..7`.
 - `kb/`
@@ -261,7 +261,7 @@ State dominance:
 - Run `make -n -C src/pdd` before full PDD builds when changing build flags or source lists.
 - For CPU-only verification, use `ENABLE_CUDA=0` to avoid requiring `nvcc`.
 - For GPU changes, verify the CUDA build path and the relevant runtime branch if hardware/tooling is available.
-- For baseline changes, work inside `src/benchmark/MODOBenchmark/dd` or `src/benchmark/MODOBenchmark/dpa` and verify their separate dependencies before building.
+- For baseline changes, work inside `src/baseline/dd` or `src/baseline/dpa` and verify their separate dependencies before building.
 - For GPU TSP autoresearch or cleanup work, read the relevant `kb/` knowledge-base files before editing, but re-check all source paths against the current tree.
 - When adding a PDD problem type:
   - Add or complete the parser in `src/pdd/instances/`.

@@ -77,7 +77,9 @@ vpath %.cpp $(SRC_DIRS)
 
 # ---- TARGETS ----
 
-EXECUTABLE=multiobj
+BIN_DIR = ../../../resources/bin/baseline/dd
+EXECUTABLE_NAME = multiobj
+EXECUTABLE=$(BIN_DIR)/$(EXECUTABLE_NAME)
 
 all: $(EXECUTABLE)
 
@@ -87,11 +89,14 @@ $(EXECUTABLE): makedir $(SOURCES) $(OBJ_FILES)
 $(OBJ_DIR)/%.o: %.cpp
 	$(CCC) $(CFLAGS) $< -o $@
 
-makedir: $(OBJ_DIRS)
+makedir: $(OBJ_DIRS) $(BIN_DIR)
 
 $(OBJ_DIRS):
 	@mkdir -p $@
 
+$(BIN_DIR):
+	@mkdir -p $@
+
 clean:
 	@rm -rf obj 
-	@rm -rf $(EXECUTABLE)
+	@rm -f $(EXECUTABLE)
