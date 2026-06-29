@@ -6,6 +6,8 @@ from pathlib import Path
 
 # Farm configurations
 FARMS = {
+    "coup":        {"runner": "baseline-dd", "backend": "cpu", "workers": 1,  "forced_method": 3, "max_knapsack": 70,  "max_setpacking": 225,  "skip_setpacking_175": True},
+    "dpa":         {"runner": "baseline-dpa", "backend": "cpu", "workers": 1,  "forced_method": None, "max_knapsack": 70,  "max_setpacking": 225,  "skip_setpacking_175": True, "modes": ["", "-a"]},
     "cpu-coup":    {"backend": "cpu", "workers": 1,  "forced_method": 0, "max_knapsack": 70,  "max_setpacking": 225,  "skip_setpacking_175": True},
     "cpu-coup-4":  {"backend": "cpu", "workers": 4,  "forced_method": 0, "max_knapsack": 70,  "max_setpacking": 225,  "skip_setpacking_175": True},
     "cpu-coup-8":  {"backend": "cpu", "workers": 8,  "forced_method": 0, "max_knapsack": 70,  "max_setpacking": 225,  "skip_setpacking_175": True},
@@ -56,7 +58,32 @@ def parse_tsp_cities(name: str):
     m = re.match(r"^tsp-nobj\d+-ncities(\d+)-seed\d+\.dat$", name)
     return int(m.group(1)) if m else None
 
-def append_case(lines, backend, cpu_workers, binary, instance, problem_type, method, dominance):
+def dpa_instance_path(instance: Path):
+    if instance.suffix == ".lp":
+        return instance
+    return instance.with_name(f"{instance.stem}-dpa.lp")
+
+def append_case(lines, config, binary, instance, problem_type, method, dominance):
+    runner = config.get("runner", "pdd")
+    backend = config["backend"]
+    cpu_workers = config["workers"]
+
+    if runner == "baseline-dpa":
+        dpa_instance = dpa_instance_path(instance)
+        for mode in config.get("modes", [""]):
+            if mode:
+                lines.append(f"{binary} {dpa_instance} {mode}")
+            else:
+                lines.append(f"{binary} {dpa_instance}")
+        return
+
+    if runner == "baseline-dd":
+        baseline_problem_type = 6 if problem_type == 3 else problem_type
+        lines.append(
+            f"{binary} {instance} {baseline_problem_type} 0 {method} 0 0 {dominance} 0"
+        )
+        return
+
     if backend == "gpu":
         lines.append(
             f"{binary} {instance} {problem_type} {method} {dominance} --backend gpu --save-frontier --save-stats"
@@ -90,7 +117,13 @@ def generate_table(farm_name, config, project_root):
         if not source_data_root.is_dir():
             continue
 
-        binary = binary_base / f"multiobj_nobjs{nobjs}"
+        runner = config.get("runner", "pdd")
+        if runner == "baseline-dd":
+            binary = binary_base / "baseline" / "dd" / f"multiobj{nobjs}"
+        elif runner == "baseline-dpa":
+            binary = binary_base / "baseline" / "dpa" / "main"
+        else:
+            binary = binary_base / f"multiobj_nobjs{nobjs}"
 
         forced_method = config["forced_method"]
         if forced_method == 0:
@@ -110,7 +143,7 @@ def generate_table(farm_name, config, project_root):
             if config["max_knapsack"] is not None and nvars > config["max_knapsack"]:
                 continue
             target_instance = target_data_base / str(nobjs) / "knapsack" / path.name
-            append_case(lines, config["backend"], config["workers"], binary, target_instance, 1, method_knapsack, 1)
+            append_case(lines, config, binary, target_instance, 1, method_knapsack, 1)
 
         # Set packing (binproblem)
         for path in iter_dat_files(source_data_root / "binproblem"):
@@ -122,7 +155,7 @@ def generate_table(farm_name, config, project_root):
             if config["skip_setpacking_175"] and nvars == 175:
                 continue
             target_instance = target_data_base / str(nobjs) / "binproblem" / path.name
-            append_case(lines, config["backend"], config["workers"], binary, target_instance, 2, method_binproblem, 0)
+            append_case(lines, config, binary, target_instance, 2, method_binproblem, 0)
 
         # TSP
         for path in iter_dat_files(source_data_root / "tsp"):
@@ -130,7 +163,7 @@ def generate_table(farm_name, config, project_root):
             if ncities is None or (ncities, nobjs) not in TSP_CASES:
                 continue
             target_instance = target_data_base / str(nobjs) / "tsp" / path.name
-            append_case(lines, config["backend"], config["workers"], binary, target_instance, 3, method_tsp, 0)
+            append_case(lines, config, binary, target_instance, 3, method_tsp, 0)
 
     return "\n".join(str(line) for line in lines) + ("\n" if lines else "")
 
