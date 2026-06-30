@@ -80,7 +80,7 @@ def append_case(lines, config, binary, instance, problem_type, method, dominance
     if runner == "baseline-dd":
         baseline_problem_type = 6 if problem_type == 3 else problem_type
         lines.append(
-            f"{binary} {instance} {baseline_problem_type} 0 {method} 0 0 {dominance} 0"
+            f"{binary} {instance} {baseline_problem_type} 0 {method} 0 0 {dominance}"
         )
         return
 
