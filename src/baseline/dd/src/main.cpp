@@ -48,7 +48,7 @@ int main(int argc, char *argv[])
     if (argc < 8)
     {
         cout << '\n';
-        cout << "Usage: multiobj [input file] [problem type] [preprocess?] [method] [appr-S and T] [dominance] [n_vars] <var1> ... <varN>\n";
+        cout << "Usage: multiobj [input file] [problem type] [preprocess?] [method] [appr-S and T] [dominance]\n";
 
         cout << "\n\twhere:";
 
@@ -76,11 +76,6 @@ int main(int argc, char *argv[])
         cout << "\t\tdominance = 0:  disable state dominance\n";
         cout << "\t\tdominance = 1:  state dominance strategy 1\n";
 
-        cout << "\n";
-        cout << "\t\tn_vars: number of variables\n";
-        cout << "\t\t<var1>\n";
-        cout << "\t\t...\n";
-        cout << "\t\t<varN>\n";
         cout << endl;
         exit(1);
     }
@@ -93,8 +88,7 @@ int main(int argc, char *argv[])
     int approx_S = atoi(argv[5]);
     int approx_T = atoi(argv[6]);
     int dominance = atoi(argv[7]);
-    int n_vars = atoi(argv[8]);
-
+    
     // For statistical analysis
     Stats timers;
     int bdd_compilation_time = timers.register_name("BDD compilation time");
