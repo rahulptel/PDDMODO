@@ -20,6 +20,8 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 
 DEFAULT_FARMS = [
+    "dpa",
+    "coup",
     "cpu-coup-4",
     "cpu-coup-8",
     "cpu-coup-16",
@@ -38,9 +40,9 @@ CSV_HEADER = [
 
 PROBLEM_ORDER = {"MOKP": 0, "MOSPP": 1, "MOTSP": 2}
 PROBLEM_CAPTIONS = {
-    "MOKP": "MOKP Pareto Enumeration Runtime Comparison Across TD/Coup GPU Methods",
-    "MOSPP": "MOSPP Pareto Enumeration Runtime Comparison Across TD/Coup GPU Methods",
-    "MOTSP": "MOTSP Pareto Enumeration Runtime Comparison Across TD/Coup GPU Methods",
+    "MOKP": "MOKP Pareto Enumeration Runtime Comparison Across Enumeration Methods",
+    "MOSPP": "MOSPP Pareto Enumeration Runtime Comparison Across Enumeration Methods",
+    "MOTSP": "MOTSP Pareto Enumeration Runtime Comparison Across Enumeration Methods",
 }
 ALLOWED_CASES_BY_PROBLEM: Dict[str, set[Tuple[int, int]]] = {
     "MOKP": {
@@ -66,6 +68,7 @@ KP_CLASSIC_RE = re.compile(r"^KP_p-(\d+)_n-(\d+)_ins-\d+$")
 KP_ALT_RE = re.compile(r"^knapsack-(\d+)-(\d+)-\d+-\d+$")
 BP_RE = re.compile(r"^bp-(\d+)-\d+-(\d+)-\d+-\d+$")
 TSP_RE = re.compile(r"^tsp-nobj(\d+)-ncities(\d+)-seed\d+$")
+DPA_RUNTIME_RE = re.compile(r"^\s*([0-9]+(?:\.[0-9]*)?|\.[0-9]+)\s+seconds\s*$")
 CPU_OOM_RE = re.compile(r"std::bad_alloc|cannot allocate memory|out of memory|oom", re.IGNORECASE)
 GPU_OOM_RE = re.compile(
     r"cudaErrorMemoryAllocation|CUDA_ERROR_OUT_OF_MEMORY|CUBLAS_STATUS_ALLOC_FAILED|"
@@ -148,10 +151,10 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--speedup-baseline",
-        default="cpu-coup-4",
+        default="coup",
         help=(
             "Baseline farm or method label for speed-up ratios "
-            "(default: cpu-coup-4)."
+            "(default: coup)."
         ),
     )
     args = parser.parse_args()
@@ -197,6 +200,8 @@ def normalize_speedup_baseline(baseline: str) -> str:
 
 def parse_problem_n_k(instance_path: str) -> Optional[Tuple[str, int, int]]:
     stem = Path(instance_path).stem
+    if stem.endswith("-dpa"):
+        stem = stem[:-4]
 
     match = KP_CLASSIC_RE.match(stem)
     if match:
@@ -226,6 +231,11 @@ def extract_flag_value(tokens: List[str], flag: str) -> Optional[str]:
 
 def method_from_farm_and_tokens(farm: str, tokens: List[str]) -> Tuple[Optional[str], bool]:
     """Return (method_label, skip_silently)."""
+    if farm == "dpa":
+        return ("DPA-A" if "-a" in tokens else "DPA-TS"), False
+    if farm == "coup":
+        return "Coup", False
+
     match = FARM_RE.match(farm)
     if not match:
         warn(f"Unsupported farm naming convention: {farm}")
@@ -407,6 +417,155 @@ def extract_metrics_for_key(key: RowKey, record: dict, farm: str, run_hint: str)
     return total_wall_s, enum_wall_s
 
 
+def read_statuses(status_path: Path, farm_label: str) -> Dict[int, int]:
+    statuses: Dict[int, int] = {}
+    if not status_path.is_file():
+        warn(f"Missing {farm_label} status file: {status_path}")
+        return statuses
+
+    try:
+        with status_path.open("r", encoding="utf-8") as handle:
+            for line_num, raw_line in enumerate(handle, start=1):
+                line = raw_line.strip()
+                if not line:
+                    continue
+
+                parts = line.split()
+                if len(parts) != 2:
+                    warn(f"Malformed {farm_label} status line {line_num} in {status_path}: {line}")
+                    continue
+
+                try:
+                    run_id = int(parts[0])
+                    status_code = int(parts[1])
+                except ValueError:
+                    warn(f"Malformed {farm_label} status line {line_num} in {status_path}: {line}")
+                    continue
+
+                if run_id in statuses:
+                    warn(
+                        f"Duplicate {farm_label} status for RUN{run_id} in {status_path}; "
+                        "using the last value"
+                    )
+                statuses[run_id] = status_code
+    except OSError as exc:
+        warn(f"Failed to read {farm_label} status file {status_path}: {exc}")
+
+    return statuses
+
+
+def read_dpa_statuses(status_path: Path) -> Dict[int, int]:
+    return read_statuses(status_path, "DPA")
+
+
+def extract_dpa_runtime_s(run_dir: Path) -> Optional[float]:
+    if not run_dir.is_dir():
+        warn(f"Missing DPA run directory: {run_dir}")
+        return None
+
+    sol_files = sorted((run_dir / "Solutions").glob("**/*.sol"))
+    if not sol_files:
+        warn(f"Missing DPA solution file in {run_dir}")
+        return None
+    if len(sol_files) > 1:
+        warn(f"Multiple DPA solution files in {run_dir}; using {sol_files[0]}")
+
+    try:
+        lines = sol_files[0].read_text(encoding="utf-8", errors="ignore").splitlines()
+    except OSError as exc:
+        warn(f"Failed to read DPA solution file {sol_files[0]}: {exc}")
+        return None
+
+    for line in reversed(lines):
+        match = DPA_RUNTIME_RE.match(line)
+        if match:
+            return float(match.group(1))
+
+    warn(f"Missing DPA runtime line in {sol_files[0]}")
+    return None
+
+
+def extract_coup_runtime_s(run_dir: Path) -> Optional[float]:
+    stdout_path = run_dir / "case.stdout"
+    if not stdout_path.is_file():
+        warn(f"Missing Coup stdout file: {stdout_path}")
+        return None
+
+    try:
+        lines = stdout_path.read_text(encoding="utf-8", errors="ignore").splitlines()
+    except OSError as exc:
+        warn(f"Failed to read Coup stdout file {stdout_path}: {exc}")
+        return None
+
+    if len(lines) < 2:
+        warn(f"Missing Coup runtime line in {stdout_path}")
+        return None
+
+    try:
+        return float(lines[1].strip())
+    except ValueError:
+        warn(f"Malformed Coup runtime line in {stdout_path}: {lines[1]}")
+        return None
+
+
+def aggregate_dpa_runs(
+    farm: str,
+    cc_farm_dir: Path,
+    output_farm_dir: Path,
+    run_to_key: Dict[int, RowKey],
+    aggregates: Dict[RowKey, Aggregate],
+) -> None:
+    statuses = read_dpa_statuses(cc_farm_dir / "STATUSES" / "status._")
+    for run_id in sorted(run_to_key):
+        key = run_to_key[run_id]
+        status_code = statuses.get(run_id)
+        run_hint = f"RUN{run_id}:{key.problem}-{key.n}-{key.k}-{key.method}"
+
+        if status_code == 0:
+            runtime_s = extract_dpa_runtime_s(output_farm_dir / f"RUN{run_id}")
+            if runtime_s is None:
+                warn(f"DPA success status but usable runtime is unavailable for {farm}/{run_hint}")
+                aggregates[key].timeout_count += 1
+            else:
+                aggregates[key].add(runtime_s, runtime_s)
+        elif status_code == 90:
+            aggregates[key].memory_out_count += 1
+        elif status_code == 91:
+            aggregates[key].timeout_count += 1
+        else:
+            warn(f"Unknown or missing DPA status ({status_code}) for {farm}/{run_hint}")
+            aggregates[key].timeout_count += 1
+
+
+def aggregate_coup_runs(
+    farm: str,
+    cc_farm_dir: Path,
+    output_farm_dir: Path,
+    run_to_key: Dict[int, RowKey],
+    aggregates: Dict[RowKey, Aggregate],
+) -> None:
+    statuses = read_statuses(cc_farm_dir / "STATUSES" / "status._", "Coup")
+    for run_id in sorted(run_to_key):
+        key = run_to_key[run_id]
+        status_code = statuses.get(run_id)
+        run_hint = f"RUN{run_id}:{key.problem}-{key.n}-{key.k}-{key.method}"
+
+        if status_code == 0:
+            runtime_s = extract_coup_runtime_s(output_farm_dir / f"RUN{run_id}")
+            if runtime_s is None:
+                warn(f"Coup success status but usable runtime is unavailable for {farm}/{run_hint}")
+                aggregates[key].timeout_count += 1
+            else:
+                aggregates[key].add(runtime_s, runtime_s)
+        elif status_code == 90:
+            aggregates[key].memory_out_count += 1
+        elif status_code == 91:
+            aggregates[key].timeout_count += 1
+        else:
+            warn(f"Unknown or missing Coup status ({status_code}) for {farm}/{run_hint}")
+            aggregates[key].timeout_count += 1
+
+
 def format_time_ceil_int(value: float) -> str:
     return str(int(math.ceil(value)))
 
@@ -461,28 +620,45 @@ def parse_method_label(method: str) -> Optional[Tuple[str, str, Optional[int]]]:
 
 
 def method_sort_key(method: str) -> Tuple[int, int, int, str]:
+    if method == "DPA-TS":
+        return (0, 0, 0, method)
+    if method == "DPA-A":
+        return (0, 1, 0, method)
+    if method == "Coup":
+        return (1, 0, 0, method)
+
     parsed = parse_method_label(method)
     if parsed is None:
         return (99, 99, 99, method)
 
     enum_name, device, threads = parsed
-    if device == "GPU":
-        sophistication = {"TD": 0, "Coup": 1}.get(enum_name, 99)
-        return (10**9, sophistication, 0, method)
+    if enum_name == "Coup" and device == "CPU":
+        parallelism = 1 if threads is None else threads
+        return (2, parallelism, 0, method)
+    if enum_name == "TD" and device == "GPU":
+        return (3, 0, 0, method)
+    if enum_name == "Coup" and device == "GPU":
+        return (4, 0, 0, method)
 
     parallelism = 1 if threads is None else threads
-    sophistication = {"TD": 0, "Coup": 1}.get(enum_name, 99)
-    return (parallelism, sophistication, 0, method)
+    sophistication = {"TD": 0}.get(enum_name, 99)
+    return (5, sophistication, parallelism, method)
 
 
 def method_display_name(problem: str, method: str) -> str:
+    if method == "Coup":
+        return "Coup"
+
     parsed = parse_method_label(method)
     if parsed is None:
         return method
 
     enum_name, device, threads = parsed
-    plus = "+" if problem == "MOKP" else ""
-    label = f"{enum_name}{plus}"
+    label = enum_name
+    if enum_name == "Coup" and device == "CPU":
+        return f"Coup-{threads}" if threads is not None else "Coup"
+    if enum_name == "Coup" and device == "GPU":
+        return "G-Coup"
     if device == "GPU":
         return f"G-{label}"
     if threads is not None:
@@ -491,20 +667,34 @@ def method_display_name(problem: str, method: str) -> str:
 
 
 def tex_method_group_and_order(method: str) -> Tuple[int, int, str]:
+    if method == "DPA-TS":
+        return (0, 0, method)
+    if method == "DPA-A":
+        return (0, 1, method)
+    if method == "Coup":
+        return (1, 0, method)
+
     parsed = parse_method_label(method)
     if parsed is None:
         return (99, 99, method)
 
     enum_name, device, threads = parsed
-    if device == "CPU" and enum_name == "TD":
-        return (0, 0 if threads is None else threads, method)
     if device == "CPU" and enum_name == "Coup":
-        return (1, 0 if threads is None else threads, method)
+        return (2, 0 if threads is None else threads, method)
     if device == "GPU" and enum_name == "TD":
-        return (2, 0, method)
+        return (3, 0, method)
     if device == "GPU" and enum_name == "Coup":
-        return (2, 1, method)
+        return (4, 0, method)
+    if device == "CPU" and enum_name == "TD":
+        return (5, 0, method)
     return (98, 98, method)
+
+
+def tex_method_display_name(problem: str, method: str) -> str:
+    name = method_display_name(problem, method)
+    if name.startswith("Coup-") or name in {"G-TD", "G-Coup"}:
+        return rf"\texttt{{{latex_escape(name)}}}"
+    return latex_escape(name)
 
 
 def is_gpu_method(method: str) -> bool:
@@ -646,7 +836,7 @@ def write_tex(
             n, k = size
             n_text = rf"\multirow{{{len(methods)}}}{{*}}{{{n}}}" if method_idx == 0 else ""
             k_text = rf"\multirow{{{len(methods)}}}{{*}}{{{k}}}" if method_idx == 0 else ""
-            method_text = latex_escape(method_display_name(problem, method))
+            method_text = tex_method_display_name(problem, method)
             key = key_lookup.get((n, k, method))
             if key is None:
                 return (n_text, k_text, method_text, "--", "--", r"$10$")
@@ -712,6 +902,25 @@ def main() -> int:
 
     for farm in args.farms:
         output_farm_dir = args.outputs_root / farm
+        if farm == "dpa":
+            aggregate_dpa_runs(
+                farm=farm,
+                cc_farm_dir=args.cc_root / farm,
+                output_farm_dir=output_farm_dir,
+                run_to_key=run_mappings[farm],
+                aggregates=aggregates,
+            )
+            continue
+        if farm == "coup":
+            aggregate_coup_runs(
+                farm=farm,
+                cc_farm_dir=args.cc_root / farm,
+                output_farm_dir=output_farm_dir,
+                run_to_key=run_mappings[farm],
+                aggregates=aggregates,
+            )
+            continue
+
         for key, record, run_name, case_stderr, case_stdout, has_frontier in scan_output_runs(
             farm, output_farm_dir, run_mappings[farm], skipped_mappings.get(farm, set())
         ):
